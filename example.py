@@ -1,9 +1,10 @@
 from graph import node, inspect
 import graph
 
-# @node
-# def fibonacci(self, n):
-#     return 1 if n < 2 else self.fibonacci(n - 1) + self.fibonacci(n - 2)
+
+@node
+def fibonacci(n):
+    return 1 if n < 2 else fibonacci(n - 1) + fibonacci(n - 2)
 
 
 @node
@@ -26,3 +27,4 @@ def sum():
 
 
 print(graph.deps(sum))  # Output: {<function a at ...>, <function b at ...>}
+print(graph.deps(fibonacci, 5))
