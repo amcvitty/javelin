@@ -20,14 +20,27 @@ Because each input carries the guard under which it is reached, the graph for
 a given cell can be built without running any body -- `deps(sheet.fib, 6)` is
 {fib(5), fib(4)} -- and evaluation follows the graph, so fib(1) runs first and
 every cell runs at most once.
+
+A cell can also be given a value directly, which shadows its body and marks
+everything downstream of it dirty:
+
+    sheet.fib.set_value(2.0, args=(0,))
+
+Inside a `diddle()` scope that change is temporary, and undoing it costs no
+recomputation:
+
+    with diddle((md.spot, 110.0), (call.strike, 95.0)):
+        note.pv()      # sees the overrides
+    note.pv()          # pre-diddle value, straight from the restored cache
 """
 
 from .ir import CompiledNode, Edge, Value
-from .node import Node, node
+from .node import BoundNode, Node, node
 from .runtime import DEFAULT, Graph, make_key
 
 __all__ = [
     "DEFAULT",
+    "BoundNode",
     "CompiledNode",
     "Edge",
     "Graph",
@@ -37,6 +50,8 @@ __all__ = [
     "clear",
     "code",
     "deps",
+    "diddle",
+    "dirty",
     "inputs",
     "make_key",
     "node",
@@ -69,6 +84,20 @@ def deps(method, *args, **kwargs):
 def all_nodes():
     """Every known cell in the default graph, as (object, method, *args) keys."""
     return DEFAULT.all_nodes()
+
+
+def dirty():
+    """Every cell in the default graph whose memoised value is stale."""
+    return DEFAULT.dirty()
+
+
+def diddle(*entries):
+    """Set values temporarily, restoring the default graph exactly on exit.
+
+    Each entry is a bound node followed by the arguments set_value takes:
+    diddle((md.spot, 110.0), (sheet.fib, 5.0, (3,))).
+    """
+    return DEFAULT.diddle(*entries)
 
 
 def clear():
