@@ -1,5 +1,5 @@
-from graph import node
 import graph
+from graph import node
 
 
 class Sheet:

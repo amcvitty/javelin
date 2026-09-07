@@ -17,8 +17,8 @@ from dataclasses import dataclass
 # without ever running its body.
 #
 # Everything lives here in the "graph" namespace rather than on the methods.
-_defs: dict = {}    # node -> _Def
-_cells: dict = {}   # key -> frozenset of dependency keys, or None if unexpanded
+_defs: dict = {}  # node -> _Def
+_cells: dict = {}  # key -> frozenset of dependency keys, or None if unexpanded
 _values: dict = {}  # key -> memoised result
 
 
@@ -69,6 +69,10 @@ class _Node:
     (obj, node, *args); accessed on the class it is the node itself.
     """
 
+    # Copied from the wrapped function by functools.update_wrapper.
+    __name__: str
+    __qualname__: str
+
     def __init__(self, func):
         self.func = func
         self.owner = None
@@ -85,7 +89,9 @@ class _Node:
 
     def __call__(self, *args, **kwargs):
         if self.owner is None:
-            raise TypeError(f"@node {self.__name__} must be defined inside a class")
+            raise TypeError(
+                f"@node {self.func.__name__} must be defined inside a class"
+            )
         obj, *args = args
         return _evaluate(_key(obj, self, args, kwargs))
 
@@ -129,8 +135,15 @@ class _Rewriter(ast.NodeTransformer):
     spec for each, together with the guard under which it is reached."""
 
     _REPEATED = (
-        ast.For, ast.AsyncFor, ast.While, ast.Lambda, ast.FunctionDef,
-        ast.AsyncFunctionDef, ast.ListComp, ast.SetComp, ast.DictComp,
+        ast.For,
+        ast.AsyncFor,
+        ast.While,
+        ast.Lambda,
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
         ast.GeneratorExp,
     )
 
@@ -140,9 +153,16 @@ class _Rewriter(ast.NodeTransformer):
         self.self_name = self_name
         self.params = params  # name -> ivs index
         self.edges = []
-        self.guards = []      # stack of (original expr, rewritten expr)
-        self.repeat = 0       # >0 while inside a loop, comprehension or lambda
+        self.guards = []  # stack of (original expr, rewritten expr)
+        self.repeat = 0  # >0 while inside a loop, comprehension or lambda
+        self.if_tests = {}  # id(If) -> (original test, rewritten test)
         self.locals = self._local_names(func_def)
+        rebound = sorted(set(params) & self.locals)
+        if rebound:
+            raise ValueError(
+                f"parameter {rebound[0]!r} is rebound in {func.__name__}; "
+                "parameters are read-only inputs"
+            )
 
     @staticmethod
     def _local_names(func_def):
@@ -170,7 +190,7 @@ class _Rewriter(ast.NodeTransformer):
         try:
             yield
         finally:
-            del self.guards[len(self.guards) - len(guards):]
+            del self.guards[len(self.guards) - len(guards) :]
 
     def _current_guard(self):
         if not self.guards:
@@ -222,11 +242,6 @@ class _Rewriter(ast.NodeTransformer):
             )
         if node.id not in self.params:
             return node
-        if not isinstance(node.ctx, ast.Load):
-            raise ValueError(
-                f"parameter {node.id!r} is rebound in {self.func.__name__}; "
-                "parameters are read-only inputs"
-            )
         return ast.copy_location(self._ivs(self.params[node.id]), node)
 
     def visit_Attribute(self, node):
@@ -270,14 +285,14 @@ class _Rewriter(ast.NodeTransformer):
 
         index = len(self.params) + len(self.edges)
         self.edges.append(
-            dict(
-                index=index,
-                target=target,
-                args=node.args,
-                keywords=node.keywords,
-                guard=None if guard is None else guard[1],
-                source=source,
-            )
+            {
+                "index": index,
+                "target": target,
+                "args": node.args,
+                "keywords": node.keywords,
+                "guard": None if guard is None else guard[1],
+                "source": source,
+            }
         )
         return ast.copy_location(self._ivs(index), node)
 
@@ -286,12 +301,13 @@ class _Rewriter(ast.NodeTransformer):
         out = []
         with self._guarded():
             for stmt in stmts:
-                out.append(self.visit(stmt))
-                if not isinstance(stmt, ast.If):
+                visited = self.visit(stmt)
+                out.append(visited)
+                if not isinstance(visited, ast.If):
                     continue
-                original, rewritten = stmt.tests
-                body_ends = _terminates(stmt.body)
-                else_ends = bool(stmt.orelse) and _terminates(stmt.orelse)
+                original, rewritten = self.if_tests[id(visited)]
+                body_ends = _terminates(visited.body)
+                else_ends = bool(visited.orelse) and _terminates(visited.orelse)
                 if body_ends and not else_ends:
                     self.guards.append((_not(original), _not(rewritten)))
                 elif else_ends and not body_ends:
@@ -301,7 +317,7 @@ class _Rewriter(ast.NodeTransformer):
     def visit_If(self, node):
         original = copy.deepcopy(node.test)
         node.test = self.visit(node.test)
-        node.tests = (original, node.test)
+        self.if_tests[id(node)] = (original, node.test)
         with self._guarded((original, node.test)):
             node.body = self.visit_block(node.body)
         with self._guarded((_not(original), _not(node.test))):
@@ -361,6 +377,12 @@ def _parse(func, owner):
     tree = ast.parse(textwrap.dedent("".join(lines)))
     ast.increment_lineno(tree, first_line - 1)
     func_def = tree.body[0]
+    if not isinstance(func_def, ast.FunctionDef):
+        # ValueError, not TypeError, to match every other unsupported
+        # construct: the argument is fine, the shape of the source is not.
+        raise ValueError(  # noqa: TRY004
+            f"@node {func.__name__} must be a plain def, not {func_def.__class__.__name__}"
+        )
 
     rewriter = _Rewriter(func, owner, self_name, params, func_def)
     func_def.body = rewriter.visit_block(func_def.body)
@@ -372,7 +394,7 @@ def _parse(func, owner):
     # Compile the rewritten body and one (self, node, ivs) lambda per edge for
     # its args and guard, all inside a factory so they share the original
     # closure.
-    parts = [ast.Name(id=func_def.name, ctx=ast.Load())]
+    parts: list[ast.expr] = [ast.Name(id=func_def.name, ctx=ast.Load())]
     needed = set()
     for edge in rewriter.edges:
         args = ast.Tuple(
@@ -406,7 +428,9 @@ def _parse(func, owner):
         ast.Module(body=[ast.copy_location(factory, func_def)], type_ignores=[])
     )
     namespace = {}
-    exec(
+    # Compiling the rewritten body is the whole point of the decorator: the
+    # source is derived from the node's own AST, never from external input.
+    exec(  # noqa: S102
         compile(module, inspect.getsourcefile(func) or "<node>", "exec"),
         func.__globals__,
         namespace,
@@ -414,7 +438,9 @@ def _parse(func, owner):
     cells = [_cell_contents(c) for c in func.__closure__ or ()]
     impl, *compiled = namespace["__make"](*cells)
 
-    inputs = [Value(index=i, name=name) for name, i in params.items()]
+    inputs: list[Value | Edge] = [
+        Value(index=i, name=name) for name, i in params.items()
+    ]
     for edge, args, guard in zip(rewriter.edges, compiled[0::2], compiled[1::2]):
         inputs.append(
             Edge(

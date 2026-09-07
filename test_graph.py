@@ -85,8 +85,12 @@ class TestCells:
         graph.deps(y.sum)
 
         assert set(graph.all_nodes()) == {
-            (x, Calc.a), (x, Calc.b), (x, Calc.sum),
-            (y, Calc.a), (y, Calc.b), (y, Calc.sum),
+            (x, Calc.a),
+            (x, Calc.b),
+            (x, Calc.sum),
+            (y, Calc.a),
+            (y, Calc.b),
+            (y, Calc.sum),
         }
 
     def test_an_empty_graph_has_no_nodes(self):
@@ -546,6 +550,14 @@ class TestUnsupported:
                 def bump(self, n):
                     n = n + 1
                     return n
+
+    def test_async_node(self):
+        with pytest.raises(ValueError, match="must be a plain def"):
+
+            class Calc:
+                @node
+                async def a(self):
+                    return 1
 
     def test_node_without_self(self):
         with pytest.raises(ValueError, match="needs a self parameter"):
