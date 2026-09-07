@@ -1,11 +1,13 @@
 """Tests for the @node decorator and the dependency graph it builds.
 
-Each test defines its own nodes, mirroring the shape of example.py:
+Nodes are methods; a cell is one invocation of a node on an object, keyed
+(object, method, *args). Each test defines its own class, mirroring the
+shape of example.py:
 
-    @node a()   -> 1          (no node deps)
-    @node b()   -> 2          (no node deps)
-          c()   -> 4          (NOT a node)
-    @node sum() -> a() + b() + c() + 1
+    @node a(self)   -> 1          (no node deps)
+    @node b(self)   -> 2          (no node deps)
+          c(self)   -> 4          (NOT a node)
+    @node sum(self) -> self.a() + self.b() + self.c() + 1
 """
 
 import pytest
@@ -24,50 +26,68 @@ def names(keys):
     """Render node keys as "a" / "fib(5)" strings, for readable assertions."""
     return {
         f"{fn.__name__}({', '.join(map(repr, args))})" if args else fn.__name__
-        for fn, *args in keys
+        for obj, fn, *args in keys
     }
 
 
-class TestAllNodes:
-    def test_decorated_functions_are_registered(self):
+def make_calc():
+    class Calc:
         @node
-        def a():
+        def a(self):
             return 1
 
         @node
-        def b():
+        def b(self):
             return 2
 
-        def c():
+        def c(self):
             return 4
 
         @node
-        def sum():
-            return a() + b() + c() + 1
+        def sum(self):
+            return self.a() + self.b() + self.c() + 1
 
+    return Calc
+
+
+class TestCells:
+    def test_cells_appear_once_referenced(self):
+        calc = make_calc()()
+        assert graph.all_nodes() == ()
+
+        graph.deps(calc.sum)
         assert names(graph.all_nodes()) == {"a", "b", "sum"}
 
-    def test_undecorated_function_is_not_a_node(self):
-        @node
-        def a():
-            return 1
+    def test_cells_are_keyed_by_object_and_method(self):
+        Calc = make_calc()
+        calc = Calc()
+        graph.deps(calc.sum)
 
-        def c():
-            return 4
+        assert set(graph.all_nodes()) == {
+            (calc, Calc.a),
+            (calc, Calc.b),
+            (calc, Calc.sum),
+        }
 
-        assert set(graph.all_nodes()) == {(a,)}
-        assert (c,) not in graph.all_nodes()
+    def test_undecorated_method_is_not_a_node(self):
+        Calc = make_calc()
+        calc = Calc()
+        graph.deps(calc.sum)
 
-    def test_registers_the_decorated_function_objects(self):
-        @node
-        def a():
-            return 1
+        assert (calc, Calc.c) not in graph.all_nodes()
+        with pytest.raises(KeyError):
+            graph.inputs(Calc.c)
 
-        @node
-        def b():
-            return 2
+    def test_each_object_has_its_own_cells(self):
+        Calc = make_calc()
+        x, y = Calc(), Calc()
+        graph.deps(x.sum)
+        graph.deps(y.sum)
 
-        assert set(graph.all_nodes()) == {(a,), (b,)}
+        assert set(graph.all_nodes()) == {
+            (x, Calc.a), (x, Calc.b), (x, Calc.sum),
+            (y, Calc.a), (y, Calc.b), (y, Calc.sum),
+        }
 
     def test_an_empty_graph_has_no_nodes(self):
         assert graph.all_nodes() == ()
@@ -75,218 +95,251 @@ class TestAllNodes:
 
 class TestDeps:
     def test_deps_only_include_other_nodes(self):
-        @node
-        def a():
-            return 1
+        Calc = make_calc()
+        calc = Calc()
 
-        @node
-        def b():
-            return 2
+        assert graph.deps(calc.sum) == {(calc, Calc.a), (calc, Calc.b)}
 
-        def c():
-            return 4
+    def test_deps_exclude_calls_to_undecorated_methods(self):
+        class Calc:
+            def c(self):
+                return 4
 
-        @node
-        def sum():
-            return a() + b() + c() + 1
+            @node
+            def sum(self):
+                return self.c() + 1
 
-        assert graph.deps(sum) == {(a,), (b,)}
-
-    def test_deps_exclude_calls_to_undecorated_functions(self):
-        def c():
-            return 4
-
-        @node
-        def sum():
-            return c() + 1
-
-        assert graph.deps(sum) == frozenset()
+        assert graph.deps(Calc().sum) == frozenset()
 
     def test_leaf_nodes_have_no_deps(self):
-        @node
-        def a():
-            return 1
-
-        assert graph.deps(a) == frozenset()
+        calc = make_calc()()
+        assert graph.deps(calc.a) == frozenset()
 
     def test_deps_are_direct_only(self):
-        @node
-        def a():
-            return 1
+        class Calc:
+            @node
+            def a(self):
+                return 1
 
-        @node
-        def b():
-            return a() + 1
+            @node
+            def b(self):
+                return self.a() + 1
 
-        @node
-        def sum():
-            return b() + 1
+            @node
+            def sum(self):
+                return self.b() + 1
 
+        calc = Calc()
         # sum reaches a only through b, so a is not a *direct* dependency.
-        assert graph.deps(sum) == {(b,)}
-        assert graph.deps(b) == {(a,)}
+        assert graph.deps(calc.sum) == {(calc, Calc.b)}
+        assert graph.deps(calc.b) == {(calc, Calc.a)}
 
     def test_a_node_called_twice_appears_once(self):
-        @node
-        def a():
-            return 1
+        class Calc:
+            @node
+            def a(self):
+                return 1
 
-        @node
-        def sum():
-            return a() + a()
+            @node
+            def sum(self):
+                return self.a() + self.a()
 
-        assert graph.deps(sum) == {(a,)}
+        calc = Calc()
+        assert graph.deps(calc.sum) == {(calc, Calc.a)}
 
     def test_deps_of_a_non_node_is_an_error(self):
-        def c():
-            return 4
-
+        calc = make_calc()()
         with pytest.raises(KeyError):
-            graph.deps(c)
+            graph.deps(calc.c)
+
+    def test_deps_needs_a_bound_method(self):
+        Calc = make_calc()
+        with pytest.raises(TypeError, match="bound method"):
+            graph.deps(Calc.sum)
 
 
 class TestDecoratedBehaviour:
-    def test_node_preserves_function_metadata(self):
-        @node
-        def a():
-            """Return one."""
-            return 1
+    def test_node_preserves_method_metadata(self):
+        class Calc:
+            @node
+            def a(self):
+                """Return one."""
+                return 1
 
-        assert a.__name__ == "a"
-        assert a.__doc__ == "Return one."
+        assert Calc.a.__name__ == "a"
+        assert Calc.a.__doc__ == "Return one."
 
     def test_nodes_are_still_callable(self):
+        calc = make_calc()()
+        assert calc.a() == 1
+        assert calc.b() == 2
+        assert calc.sum() == 1 + 2 + 4 + 1
+
+    def test_node_outside_a_class_is_rejected(self):
         @node
         def a():
             return 1
 
-        @node
-        def b():
-            return 2
-
-        def c():
-            return 4
-
-        @node
-        def sum():
-            return a() + b() + c() + 1
-
-        assert a() == 1
-        assert b() == 2
-        assert sum() == 1 + 2 + 4 + 1
+        with pytest.raises(TypeError, match="inside a class"):
+            a()
 
 
 class TestRewrite:
     """@node rewrites the body into a pure function of its input values,
     ivs, plus a spec for how each input is produced:
 
-        def fib(node, ivs):
+        def fib(self, node, ivs):
             return ivs[0] if ivs[0] < 2 else ivs[1] + ivs[2]
 
         ivs[0] = n
-        ivs[1] = fib(n - 1) if not n < 2
-        ivs[2] = fib(n - 2) if not n < 2
+        ivs[1] = self.fib(n - 1) if not n < 2
+        ivs[2] = self.fib(n - 2) if not n < 2
     """
 
     def test_parameters_and_node_calls_become_input_values(self):
-        @node
-        def fib(n):
-            return n if n < 2 else fib(n - 1) + fib(n - 2)
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
 
-        assert graph.code(fib) == (
-            "def fib(node, ivs):\n"
+        assert graph.code(Calc.fib) == (
+            "def fib(self, node, ivs):\n"
             "    return ivs[0] if ivs[0] < 2 else ivs[1] + ivs[2]"
         )
 
     def test_inputs_list_arguments_then_calls_with_their_guards(self):
-        @node
-        def fib(n):
-            return n if n < 2 else fib(n - 1) + fib(n - 2)
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
 
-        assert [str(i) for i in graph.inputs(fib)] == [
+        assert [str(i) for i in graph.inputs(Calc.fib)] == [
             "n",
-            "fib(n - 1) if not n < 2",
-            "fib(n - 2) if not n < 2",
+            "self.fib(n - 1) if not n < 2",
+            "self.fib(n - 2) if not n < 2",
         ]
 
     def test_arguments_are_terminals_and_calls_are_edges(self):
-        @node
-        def fib(n):
-            return n if n < 2 else fib(n - 1) + fib(n - 2)
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
 
-        n, left, right = graph.inputs(fib)
+        n, left, right = graph.inputs(Calc.fib)
         assert isinstance(n, graph.Value)
-        assert isinstance(left, graph.Edge) and left.target is fib
-        assert isinstance(right, graph.Edge) and right.target is fib
+        assert isinstance(left, graph.Edge) and left.target == "fib"
+        assert isinstance(right, graph.Edge) and right.target == "fib"
 
     def test_undecorated_calls_stay_in_the_body(self):
-        @node
-        def a():
-            return 1
+        Calc = make_calc()
 
-        def c():
-            return 4
-
-        @node
-        def sum():
-            return a() + b_free() + c() + 1
-
-        assert graph.code(sum) == (
-            "def sum(node, ivs):\n    return ivs[0] + b_free() + c() + 1"
+        assert graph.code(Calc.sum) == (
+            "def sum(self, node, ivs):\n    return ivs[0] + ivs[1] + self.c() + 1"
         )
-        assert [str(i) for i in graph.inputs(sum)] == ["a()"]
+        assert [str(i) for i in graph.inputs(Calc.sum)] == ["self.a()", "self.b()"]
+
+    def test_module_level_calls_stay_in_the_body(self):
+        class Calc:
+            @node
+            def a(self):
+                return 1
+
+            @node
+            def sum(self):
+                return self.a() + helper()
+
+        assert graph.code(Calc.sum) == (
+            "def sum(self, node, ivs):\n    return ivs[0] + helper()"
+        )
+        assert Calc().sum() == 1
 
     def test_early_return_guards_what_follows(self):
-        @node
-        def fib(n):
-            if n < 2:
-                return n
-            return fib(n - 1) + fib(n - 2)
+        class Calc:
+            @node
+            def fib(self, n):
+                if n < 2:
+                    return n
+                return self.fib(n - 1) + self.fib(n - 2)
 
-        assert [str(i) for i in graph.inputs(fib)] == [
+        assert [str(i) for i in graph.inputs(Calc.fib)] == [
             "n",
-            "fib(n - 1) if not n < 2",
-            "fib(n - 2) if not n < 2",
+            "self.fib(n - 1) if not n < 2",
+            "self.fib(n - 2) if not n < 2",
         ]
-        assert fib(6) == 8
+        assert Calc().fib(6) == 8
 
     def test_short_circuit_guards(self):
-        @node
-        def a():
-            return 0
+        class Calc:
+            @node
+            def a(self):
+                return 0
 
-        @node
-        def b():
-            return 2
+            @node
+            def b(self):
+                return 2
 
-        @node
-        def either():
-            return a() or b()
+            @node
+            def either(self):
+                return self.a() or self.b()
 
-        assert [str(i) for i in graph.inputs(either)] == ["a()", "b() if not a()"]
-        assert either() == 2
+        assert [str(i) for i in graph.inputs(Calc.either)] == [
+            "self.a()",
+            "self.b() if not self.a()",
+        ]
+        assert Calc().either() == 2
 
     def test_node_calls_nested_in_arguments_are_evaluated_first(self):
-        @node
-        def one():
-            return 1
+        class Calc:
+            @node
+            def one(self):
+                return 1
 
-        @node
-        def double(n):
-            return n * 2
+            @node
+            def double(self, n):
+                return n * 2
 
-        @node
-        def answer():
-            return double(one())
+            @node
+            def answer(self):
+                return self.double(self.one())
 
-        assert [str(i) for i in graph.inputs(answer)] == ["one()", "double(one())"]
-        assert graph.deps(answer) == {(one,), (double, 1)}
-        assert answer() == 2
+        calc = Calc()
+        assert [str(i) for i in graph.inputs(Calc.answer)] == [
+            "self.one()",
+            "self.double(self.one())",
+        ]
+        assert graph.deps(calc.answer) == {(calc, Calc.one), (calc, Calc.double, 1)}
+        assert calc.answer() == 2
+
+    def test_nodes_may_reference_ones_defined_later_in_the_class(self):
+        class Parity:
+            @node
+            def even(self, n):
+                return True if n == 0 else self.odd(n - 1)
+
+            @node
+            def odd(self, n):
+                return False if n == 0 else self.even(n - 1)
+
+        p = Parity()
+        assert graph.deps(p.even, 2) == {(p, Parity.odd, 1)}
+        assert p.even(4) is True
+        assert p.odd(4) is False
 
 
-def b_free():
-    """A module-level helper that is deliberately not a node."""
+def helper():
+    """A module-level function that is deliberately not a node."""
     return 0
+
+
+def make_fib(evaluated=None):
+    class Fib:
+        @node
+        def fib(self, n):
+            if evaluated is not None:
+                evaluated.append(n)
+            return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
+
+    return Fib
 
 
 class TestStaticDeps:
@@ -295,80 +348,95 @@ class TestStaticDeps:
     *values* of earlier inputs: those edges change the shape of the graph.
     """
 
-    @staticmethod
-    def make_fib(evaluated=None):
-        @node
-        def fib(n):
-            if evaluated is not None:
-                evaluated.append(n)
-            return n if n < 2 else fib(n - 1) + fib(n - 2)
-
-        return fib
-
     def test_deps_are_known_without_evaluating(self):
         evaluated = []
-        fib = self.make_fib(evaluated)
+        Fib = make_fib(evaluated)
+        f = Fib()
 
-        assert graph.deps(fib, 6) == {(fib, 5), (fib, 4)}
-        assert graph.deps(fib, 5) == {(fib, 4), (fib, 3)}
+        assert graph.deps(f.fib, 6) == {(f, Fib.fib, 5), (f, Fib.fib, 4)}
+        assert graph.deps(f.fib, 5) == {(f, Fib.fib, 4), (f, Fib.fib, 3)}
         assert evaluated == []
 
     def test_guarded_edges_are_absent_in_the_base_case(self):
-        fib = self.make_fib()
+        f = make_fib()()
 
-        assert graph.deps(fib, 0) == frozenset()
-        assert graph.deps(fib, 1) == frozenset()
+        assert graph.deps(f.fib, 0) == frozenset()
+        assert graph.deps(f.fib, 1) == frozenset()
 
     def test_a_parameterised_node_has_no_cells_until_one_is_referenced(self):
-        fib = self.make_fib()
+        f = make_fib()()
         assert graph.all_nodes() == ()
 
-        graph.deps(fib, 2)
+        graph.deps(f.fib, 2)
         assert names(graph.all_nodes()) == {"fib(2)", "fib(1)", "fib(0)"}
 
     def test_keyword_and_positional_args_name_the_same_cell(self):
-        fib = self.make_fib()
+        Fib = make_fib()
+        f = Fib()
 
-        assert graph.deps(fib, 4) == graph.deps(fib, n=4) == {(fib, 3), (fib, 2)}
+        assert (
+            graph.deps(f.fib, 4)
+            == graph.deps(f.fib, n=4)
+            == {(f, Fib.fib, 3), (f, Fib.fib, 2)}
+        )
 
     def test_zero_arg_node_depending_on_a_parameterised_one(self):
-        fib = self.make_fib()
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
 
-        @node
-        def answer():
-            return fib(4) + 1
+            @node
+            def answer(self):
+                return self.fib(4) + 1
 
-        assert graph.deps(answer) == {(fib, 4)}
-        assert answer() == 4
+        calc = Calc()
+        assert graph.deps(calc.answer) == {(calc, Calc.fib, 4)}
+        assert calc.answer() == 4
 
     def test_edge_whose_shape_depends_on_another_cells_value(self):
-        fib = self.make_fib()
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
 
-        @node
-        def threshold():
-            return 3
+            @node
+            def threshold(self):
+                return 3
 
-        @node
-        def pick(n):
-            return fib(n) if n > threshold() else 0
+            @node
+            def pick(self, n):
+                return self.fib(n) if n > self.threshold() else 0
 
-        assert [str(i) for i in graph.inputs(pick)] == [
+        calc = Calc()
+        assert [str(i) for i in graph.inputs(Calc.pick)] == [
             "n",
-            "threshold()",
-            "fib(n) if n > threshold()",
+            "self.threshold()",
+            "self.fib(n) if n > self.threshold()",
         ]
         # Deciding whether fib(n) is an edge needs threshold's value, but
         # never fib's.
-        assert graph.deps(pick, 5) == {(threshold,), (fib, 5)}
-        assert graph.deps(pick, 1) == {(threshold,)}
-        assert (threshold,) in graph.all_nodes()
+        assert graph.deps(calc.pick, 5) == {(calc, Calc.threshold), (calc, Calc.fib, 5)}
+        assert graph.deps(calc.pick, 1) == {(calc, Calc.threshold)}
 
     def test_cells_are_shared_between_callers(self):
-        fib = self.make_fib()
-        fib(5)
-        fib(4)
+        f = make_fib()()
+        f.fib(5)
+        f.fib(4)
 
-        assert sum(1 for fn, *args in graph.all_nodes() if args == [4]) == 1
+        assert sum(1 for obj, fn, *args in graph.all_nodes() if args == [4]) == 1
+
+    def test_a_subclass_may_override_a_node(self):
+        Calc = make_calc()
+
+        class Override(Calc):
+            @node
+            def a(self):
+                return 10
+
+        o = Override()
+        assert graph.deps(o.sum) == {(o, Override.a), (o, Calc.b)}
+        assert o.sum() == 10 + 2 + 4 + 1
 
 
 class TestEvaluation:
@@ -378,23 +446,32 @@ class TestEvaluation:
 
     def test_leaves_run_first_and_each_cell_runs_once(self):
         evaluated = []
-        fib = TestStaticDeps.make_fib(evaluated)
+        f = make_fib(evaluated)()
 
-        assert fib(5) == 5
+        assert f.fib(5) == 5
         assert evaluated == [1, 0, 2, 3, 4, 5]
 
     def test_results_are_memoised_across_calls(self):
         evaluated = []
-        fib = TestStaticDeps.make_fib(evaluated)
+        f = make_fib(evaluated)()
 
-        fib(5)
-        fib(5)
-        fib(3)
+        f.fib(5)
+        f.fib(5)
+        f.fib(3)
         assert evaluated == [1, 0, 2, 3, 4, 5]
 
+    def test_objects_are_memoised_separately(self):
+        evaluated = []
+        Fib = make_fib(evaluated)
+        x, y = Fib(), Fib()
+
+        x.fib(2)
+        y.fib(2)
+        assert evaluated == [1, 0, 2, 1, 0, 2]
+
     def test_every_evaluated_cell_is_a_node(self):
-        fib = TestStaticDeps.make_fib()
-        fib(4)
+        f = make_fib()()
+        f.fib(4)
 
         assert names(graph.all_nodes()) == {
             "fib(4)",
@@ -405,44 +482,79 @@ class TestEvaluation:
         }
 
     def test_parameterised_node_computes_correctly(self):
-        fib = TestStaticDeps.make_fib()
-        assert [fib(n) for n in range(8)] == [0, 1, 1, 2, 3, 5, 8, 13]
+        f = make_fib()()
+        assert [f.fib(n) for n in range(8)] == [0, 1, 1, 2, 3, 5, 8, 13]
 
 
 class TestUnsupported:
-    """Patterns that cannot be turned into a fixed list of inputs fail at
-    decoration time rather than silently building the wrong graph."""
+    """Patterns that cannot be turned into a fixed list of inputs, or that
+    would let a node see more than functions and constants, fail when the
+    class is created rather than silently building the wrong graph."""
+
+    def test_reference_to_a_member_variable(self):
+        with pytest.raises(ValueError, match="member variable self.x"):
+
+            class Calc:
+                def __init__(self):
+                    self.x = 1
+
+                @node
+                def total(self):
+                    return self.x + 1
+
+    def test_self_used_as_a_value(self):
+        with pytest.raises(ValueError, match="'self' may only be used to call"):
+
+            class Calc:
+                @node
+                def me(self):
+                    return helper_taking(self)
 
     def test_node_call_inside_a_loop(self):
-        @node
-        def a():
-            return 1
-
         with pytest.raises(ValueError, match="loop"):
 
-            @node
-            def total():
-                acc = 0
-                for _ in range(3):
-                    acc += a()
-                return acc
+            class Calc:
+                @node
+                def a(self):
+                    return 1
+
+                @node
+                def total(self):
+                    acc = 0
+                    for _ in range(3):
+                        acc += self.a()
+                    return acc
 
     def test_node_call_whose_argument_is_a_local(self):
-        @node
-        def double(n):
-            return n * 2
-
         with pytest.raises(ValueError, match="local 'x'"):
 
-            @node
-            def answer():
-                x = 3
-                return double(x)
+            class Calc:
+                @node
+                def double(self, n):
+                    return n * 2
+
+                @node
+                def answer(self):
+                    x = 3
+                    return self.double(x)
 
     def test_rebinding_a_parameter(self):
         with pytest.raises(ValueError, match="rebound"):
 
-            @node
-            def bump(n):
-                n = n + 1
-                return n
+            class Calc:
+                @node
+                def bump(self, n):
+                    n = n + 1
+                    return n
+
+    def test_node_without_self(self):
+        with pytest.raises(ValueError, match="needs a self parameter"):
+
+            class Calc:
+                @node
+                def a():
+                    return 1
+
+
+def helper_taking(obj):
+    return obj

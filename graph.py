@@ -4,18 +4,20 @@ import copy
 import functools
 import inspect
 import textwrap
+import types
 from dataclasses import dataclass
 
-# A cell is one invocation of a node, keyed (function, *args). Terminals are
-# the constant argument values themselves; everything else is a cell.
+# A cell is one invocation of a node method on an object, keyed
+# (object, method, *args). Terminals are the constant argument values
+# themselves; everything else is a cell.
 #
-# A node's body is rewritten at decoration time into a pure function of its
-# input values, `impl(node, ivs)`, plus a spec describing how to produce each
-# input. Those specs are what let a cell's dependencies be found without ever
-# running its body.
+# A node's body is rewritten when its class is created into a pure function
+# of its input values, `impl(self, node, ivs)`, plus a spec describing how to
+# produce each input. Those specs are what let a cell's dependencies be found
+# without ever running its body.
 #
-# Everything lives here in the "graph" namespace rather than on the functions.
-_defs: dict = {}    # node function -> _Def
+# Everything lives here in the "graph" namespace rather than on the methods.
+_defs: dict = {}    # node -> _Def
 _cells: dict = {}   # key -> frozenset of dependency keys, or None if unexpanded
 _values: dict = {}  # key -> memoised result
 
@@ -33,15 +35,16 @@ class Value:
 
 @dataclass(frozen=True)
 class Edge:
-    """An input that is itself a cell.
+    """An input that is itself a cell, reached by calling `target` on the
+    same object.
 
     Which cell is only known once `args` is evaluated against the earlier
     inputs, and only if `guard` (the condition under which the original call
-    site is reached) holds. Both are pure functions of (node, ivs).
+    site is reached) holds. Both are pure functions of (self, node, ivs).
     """
 
     index: int
-    target: object
+    target: str
     args: object
     guard: object
     source: str
@@ -54,36 +57,45 @@ class Edge:
 class _Def:
     impl: object
     inputs: tuple
-    signature: inspect.Signature
+    signature: inspect.Signature  # without self
     needed: frozenset  # input indices whose values some later input reads
     code: str
+
+
+class _Node:
+    """What @node puts on the class.
+
+    Accessed on an instance it is a bound method that evaluates the cell
+    (obj, node, *args); accessed on the class it is the node itself.
+    """
+
+    def __init__(self, func):
+        self.func = func
+        self.owner = None
+        functools.update_wrapper(self, func)
+
+    def __set_name__(self, owner, name):
+        # The class body is complete here, so every self.<method>() in the
+        # source can be checked against it.
+        self.owner = owner
+        _defs[self] = _parse(self.func, owner)
+
+    def __get__(self, obj, objtype=None):
+        return self if obj is None else types.MethodType(self, obj)
+
+    def __call__(self, *args, **kwargs):
+        if self.owner is None:
+            raise TypeError(f"@node {self.__name__} must be defined inside a class")
+        obj, *args = args
+        return _evaluate(_key(obj, self, args, kwargs))
+
+    def __repr__(self):
+        return f"<node {self.__qualname__}>"
 
 
 # ---------------------------------------------------------------------------
 # Parsing: rewrite the body and extract the input specs
 # ---------------------------------------------------------------------------
-
-_SELF = object()  # a call site that refers to the node being defined
-
-
-def _resolve(func, name):
-    """Look up name the way the body of func would see it."""
-    freevars = func.__code__.co_freevars
-    if name in freevars and func.__closure__ is not None:
-        cell = func.__closure__[freevars.index(name)]
-        try:
-            return cell.cell_contents
-        except ValueError:
-            # Cell not filled yet, e.g. a forward or recursive reference.
-            return None
-    return func.__globals__.get(name)
-
-
-def _is_node(obj):
-    try:
-        return obj in _defs
-    except TypeError:  # unhashable, so certainly not one of ours
-        return False
 
 
 def _not(expr):
@@ -94,8 +106,10 @@ def _terminates(stmts):
     return bool(stmts) and isinstance(stmts[-1], (ast.Return, ast.Raise))
 
 
-def _node_ivs_args():
-    return ast.arguments(args=[ast.arg(arg="node"), ast.arg(arg="ivs")])
+def _impl_args(self_name):
+    return ast.arguments(
+        args=[ast.arg(arg=self_name), ast.arg(arg="node"), ast.arg(arg="ivs")]
+    )
 
 
 def _ivs_indices(expr):
@@ -120,8 +134,10 @@ class _Rewriter(ast.NodeTransformer):
         ast.GeneratorExp,
     )
 
-    def __init__(self, func, params, func_def):
+    def __init__(self, func, owner, self_name, params, func_def):
         self.func = func
+        self.owner = owner
+        self.self_name = self_name
         self.params = params  # name -> ivs index
         self.edges = []
         self.guards = []      # stack of (original expr, rewritten expr)
@@ -168,14 +184,19 @@ class _Rewriter(ast.NodeTransformer):
             ast.BoolOp(op=ast.And(), values=rewritten),
         )
 
+    def _is_self_receiver(self, func_expr):
+        return (
+            isinstance(func_expr, ast.Attribute)
+            and isinstance(func_expr.value, ast.Name)
+            and func_expr.value.id == self.self_name
+        )
+
     def _target(self, func_expr):
-        """The node a call refers to, or None if it is not a node call."""
-        if not isinstance(func_expr, ast.Name) or func_expr.id in self.params:
+        """The name of the node a call refers to, or None if not a node call."""
+        if not self._is_self_receiver(func_expr):
             return None
-        if func_expr.id == self.func.__name__:
-            return _SELF
-        resolved = _resolve(self.func, func_expr.id)
-        return resolved if _is_node(resolved) else None
+        attr = getattr(self.owner, func_expr.attr, None)
+        return func_expr.attr if isinstance(attr, _Node) else None
 
     def _check_hoistable(self, expr, source):
         for n in ast.walk(expr):
@@ -183,12 +204,22 @@ class _Rewriter(ast.NodeTransformer):
                 raise ValueError(
                     f"input {source!r} refers to local {n.id!r}; an input may "
                     "only use the node's parameters, earlier inputs and names "
-                    "from outside the function"
+                    "from outside the method"
                 )
+
+    def _visit_arguments(self, call):
+        call.args = [self.visit(a) for a in call.args]
+        call.keywords = [self.visit(k) for k in call.keywords]
+        return call
 
     # -- the rewrite -------------------------------------------------------
 
     def visit_Name(self, node):
+        if node.id == self.self_name:
+            raise ValueError(
+                f"{self.func.__name__}: {node.id!r} may only be used to call a "
+                f"method, as {node.id}.<method>(...)"
+            )
         if node.id not in self.params:
             return node
         if not isinstance(node.ctx, ast.Load):
@@ -198,9 +229,22 @@ class _Rewriter(ast.NodeTransformer):
             )
         return ast.copy_location(self._ivs(self.params[node.id]), node)
 
+    def visit_Attribute(self, node):
+        if isinstance(node.value, ast.Name) and node.value.id == self.self_name:
+            raise ValueError(
+                f"{self.func.__name__}: reference to member variable "
+                f"{ast.unparse(node)}; only functions and constants may be "
+                "used in a node"
+            )
+        return self.generic_visit(node)
+
     def visit_Call(self, node):
         target = self._target(node.func)
         if target is None:
+            if self._is_self_receiver(node.func):
+                # A plain method call stays in the body; only its arguments
+                # are rewritten.
+                return self._visit_arguments(node)
             return self.generic_visit(node)
 
         source = ast.unparse(node)
@@ -215,7 +259,7 @@ class _Rewriter(ast.NodeTransformer):
             raise ValueError(f"{source}: *args and **kwargs are not supported")
 
         # Node calls nested in the arguments become inputs first.
-        node = self.generic_visit(node)
+        node = self._visit_arguments(node)
         for expr in [*node.args, *(k.value for k in node.keywords)]:
             self._check_hoistable(expr, source)
 
@@ -305,24 +349,29 @@ def _cell_contents(cell):
         return None
 
 
-def _parse(func, self_node):
+def _parse(func, owner):
+    signature = inspect.signature(func)
+    parameters = list(signature.parameters.values())
+    if not parameters:
+        raise ValueError(f"@node {func.__name__} needs a self parameter")
+    self_name = parameters[0].name
+    params = {p.name: i for i, p in enumerate(parameters[1:])}
+
     lines, first_line = inspect.getsourcelines(func)
     tree = ast.parse(textwrap.dedent("".join(lines)))
     ast.increment_lineno(tree, first_line - 1)
     func_def = tree.body[0]
 
-    signature = inspect.signature(func)
-    params = {name: i for i, name in enumerate(signature.parameters)}
-
-    rewriter = _Rewriter(func, params, func_def)
+    rewriter = _Rewriter(func, owner, self_name, params, func_def)
     func_def.body = rewriter.visit_block(func_def.body)
-    func_def.args = _node_ivs_args()
+    func_def.args = _impl_args(self_name)
     func_def.decorator_list = []
     func_def.returns = None
     code = ast.unparse(func_def)
 
-    # Compile the rewritten body and one (node, ivs) lambda per edge for its
-    # args and guard, all inside a factory so they share the original closure.
+    # Compile the rewritten body and one (self, node, ivs) lambda per edge for
+    # its args and guard, all inside a factory so they share the original
+    # closure.
     parts = [ast.Name(id=func_def.name, ctx=ast.Load())]
     needed = set()
     for edge in rewriter.edges:
@@ -337,11 +386,11 @@ def _parse(func, self_node):
             ctx=ast.Load(),
         )
         guard = edge["guard"]
-        parts.append(ast.Lambda(args=_node_ivs_args(), body=args))
+        parts.append(ast.Lambda(args=_impl_args(self_name), body=args))
         parts.append(
             ast.Constant(value=None)
             if guard is None
-            else ast.Lambda(args=_node_ivs_args(), body=guard)
+            else ast.Lambda(args=_impl_args(self_name), body=guard)
         )
         needed |= _ivs_indices(args)
         if guard is not None:
@@ -367,11 +416,10 @@ def _parse(func, self_node):
 
     inputs = [Value(index=i, name=name) for name, i in params.items()]
     for edge, args, guard in zip(rewriter.edges, compiled[0::2], compiled[1::2]):
-        target = self_node if edge["target"] is _SELF else edge["target"]
         inputs.append(
             Edge(
                 index=edge["index"],
-                target=target,
+                target=edge["target"],
                 args=args,
                 guard=guard,
                 source=edge["source"],
@@ -381,7 +429,7 @@ def _parse(func, self_node):
     return _Def(
         impl=impl,
         inputs=tuple(inputs),
-        signature=signature,
+        signature=signature.replace(parameters=parameters[1:]),
         needed=frozenset(needed),
         code=code,
     )
@@ -392,12 +440,12 @@ def _parse(func, self_node):
 # ---------------------------------------------------------------------------
 
 
-def _key(fn, args=(), kwargs=None):
-    """The (function, *args) key for a cell, canonicalising how args were
-    passed so that fib(3) and fib(n=3) name the same cell."""
+def _key(obj, fn, args=(), kwargs=None):
+    """The (object, method, *args) key for a cell, canonicalising how args
+    were passed so that fib(3) and fib(n=3) name the same cell."""
     bound = _defs[fn].signature.bind(*args, **(kwargs or {}))
     bound.apply_defaults()
-    return (fn, *bound.arguments.values())
+    return (obj, fn, *bound.arguments.values())
 
 
 def _resolve_inputs(key, evaluate_all):
@@ -407,7 +455,7 @@ def _resolve_inputs(key, evaluate_all):
     evaluate_all is set, or when a later input reads them to decide which
     cell it refers to.
     """
-    fn, *args = key
+    obj, fn, *args = key
     d = _defs[fn]
     ivs = [None] * len(d.inputs)
     deps = []
@@ -415,10 +463,11 @@ def _resolve_inputs(key, evaluate_all):
         if isinstance(inp, Value):
             ivs[inp.index] = args[inp.index]
             continue
-        if inp.guard is not None and not inp.guard(key, ivs):
+        if inp.guard is not None and not inp.guard(obj, key, ivs):
             continue
-        positional, keywords = inp.args(key, ivs)
-        dep = _key(inp.target, positional, keywords)
+        positional, keywords = inp.args(obj, key, ivs)
+        # Looked up on the object's own type, so a subclass may override a node.
+        dep = _key(obj, getattr(type(obj), inp.target), positional, keywords)
         deps.append(dep)
         if evaluate_all or inp.index in d.needed:
             ivs[inp.index] = _evaluate(dep)
@@ -442,7 +491,8 @@ def _evaluate(key):
         return _values[key]
     deps, ivs = _resolve_inputs(key, evaluate_all=True)
     _register(key, deps)
-    _values[key] = _defs[key[0]].impl(key, ivs)
+    obj, fn, *_ = key
+    _values[key] = _defs[fn].impl(obj, key, ivs)
     return _values[key]
 
 
@@ -452,31 +502,27 @@ def _evaluate(key):
 
 
 def node(func):
-    """Decorator marking a function as a node (a "cell") in the dependency graph."""
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        return _evaluate(_key(wrapper, args, kwargs))
-
-    _defs[wrapper] = _parse(func, wrapper)
-    # A node with no parameters has a single, knowable cell.
-    if not _defs[wrapper].signature.parameters:
-        _cells.setdefault((wrapper,), None)
-    return wrapper
+    """Decorator marking a method as a node (a "cell") in the dependency graph."""
+    return _Node(func)
 
 
-def inputs(fn):
+def _node_of(method):
+    """Accept a node from the class (Calc.fib) or bound to an instance (calc.fib)."""
+    return getattr(method, "__func__", method)
+
+
+def inputs(method):
     """The input specs of a node, in evaluation order."""
-    return _defs[fn].inputs
+    return _defs[_node_of(method)].inputs
 
 
-def code(fn):
-    """The rewritten source of a node: a pure function of (node, ivs)."""
-    return _defs[fn].code
+def code(method):
+    """The rewritten source of a node: a pure function of (self, node, ivs)."""
+    return _defs[_node_of(method)].code
 
 
 def all_nodes():
-    """Every known cell, as (function, *args) keys."""
+    """Every known cell, as (object, method, *args) keys."""
     return tuple(_cells)
 
 
@@ -487,13 +533,16 @@ def clear():
     _values.clear()
 
 
-def deps(fn, *args, **kwargs):
-    """The direct dependencies of the cell fn(*args), as node keys.
+def deps(method, *args, **kwargs):
+    """The direct dependencies of the cell obj.method(*args), as node keys.
 
-    Worked out from the node's input specs, so the cell itself never runs.
-    Raises KeyError if fn is not a node.
+    `method` is bound, e.g. deps(calc.fib, 5). Worked out from the node's
+    input specs, so the cell itself never runs. Raises KeyError if the method
+    is not a node.
     """
-    key = _key(fn, args, kwargs)
+    if not hasattr(method, "__self__"):
+        raise TypeError("deps needs a bound method, e.g. deps(calc.fib, 5)")
+    key = _key(method.__self__, method.__func__, args, kwargs)
     if _cells.get(key) is None:
         _expand(key)
     return _cells[key]
