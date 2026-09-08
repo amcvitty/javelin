@@ -92,8 +92,15 @@ class Namespace:
     # -- housekeeping ------------------------------------------------------
 
     def clear(self):
-        """Forget every object held in memory. The store is left alone."""
+        """Forget every object held in memory. The store is left alone, so a
+        later lookup can still load it back."""
         self._objects.clear()
+
+    def clear_store(self):
+        """Forget every *persisted* object too. Separate from `clear` because
+        the round-trip flow -- store, clear, load again -- needs the store to
+        survive `clear`; a test starting from nothing needs it gone."""
+        self._store.clear()
 
     def all_objects(self):
         return tuple(self._objects.values())

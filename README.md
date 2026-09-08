@@ -242,6 +242,51 @@ mkt.store()
 
 See [example_namespace.py](example_namespace.py) for the whole thing running.
 
+## Worked example: an option pricer
+
+The `analytics` package puts a real Black-Scholes pricer on top of all of this.
+Market data and instruments are `McObject`s in the namespace, so pricing is an
+ordinary graph computation and a greek is a `diddle`.
+
+```python
+mkt = ns.lookup_or_new("/mkt/EQ/ACME/Market", Market, spot=100.0, vol=0.2)
+ns.lookup_or_new("/mkt/IR/USD/Curve", DiscountCurve, rate=0.03)
+ns.lookup_or_new("/mkt/ENV/Default", PricingEnv)
+a = ns.lookup_or_new("/inst/EQ/Option/ACME-C95", EuropeanOption, strike=95.0)
+b = ns.lookup_or_new("/inst/EQ/Option/ACME-C105", EuropeanOption, strike=105.0)
+```
+
+`a.pv()` is Black-Scholes: `forward → d1 → d2 → price`, with the option reaching
+`spot` and `vol` off the shared `Market`, `rate` off the `DiscountCurve`, and
+the valuation date off the `PricingEnv` — all by name. `tenor` (year fraction
+to expiry) is a hoisted `Local`: it reads only edges and feeds the node-call
+argument `curve().discount_factor(tenor)`, the pattern the engine was taught in
+["Intermediate locals"](#intermediate-locals).
+
+The point is the greek. Bump spot inside a `diddle`, reprice, let the scope
+restore:
+
+```python
+s0, h = mkt.spot(), 1e-4 * mkt.spot()
+with graph.diddle((mkt.spot, s0 + h)):
+    up = a.pv() + b.pv()
+with graph.diddle((mkt.spot, s0 - h)):
+    down = a.pv() + b.pv()
+delta = (up - down) / (2 * h)  # == N(d1_a) + N(d1_b), to 1e-6
+```
+
+`tests/test_greeks_by_diddle.py` asserts the two things that matter: entering
+the bump recomputes **exactly** `{forward, d1, d2, pv}` on each leg and nothing
+on the shared market data, and leaving the scope recomputes **nothing**.
+
+The pricer is flat where flatness costs nothing to prove: one `rate`, one
+`vol`. A term structure and a vol surface, a `/prod` composition layer, and the
+`/trade` / `/book` layers of the naming scheme are tracked as follow-ups.
+See [CONTEXT.md](CONTEXT.md) and
+[docs/adr/0001-namespace-taxonomy.md](docs/adr/0001-namespace-taxonomy.md) for
+the object naming scheme, and [example_pricer.py](example_pricer.py) for the
+whole thing running.
+
 ## Layout
 
 ```
@@ -258,9 +303,16 @@ ns/
   namespace.py  Namespace, DEFAULT -- objects by name
   store.py      SqliteStore and the JSON codec
   __init__.py   public API, bound to the default Namespace
+
+analytics/
+  blackscholes.py  pure Black-Scholes maths, no graph import
+  market.py        Market, DiscountCurve, PricingEnv -- the /mkt objects
+  instrument.py    EuropeanOption -- the /inst objects
+  __init__.py      public API
 ```
 
-`ns` depends on `graph`; nothing in `graph` imports `ns`.
+`analytics` depends on `ns`, `ns` depends on `graph`; imports never run the
+other way.
 
 Imports run one way, `compiler -> ir <- runtime`, with `node` on top:
 
@@ -381,17 +433,27 @@ source code`.
 uv run ruff format      # standardise formatting
 uv run ruff check --fix # lint
 uv run ty check         # types
-uv run pytest -q        # 123 tests
+uv run pytest -q        # 158 tests
 ```
 
-Tests mirror the packages: `test_rewrite.py` (the transform and its rejections),
-`test_deps.py` (graph shape), `test_eval.py` (order and memoisation),
-`test_api.py` (decorator surface), `test_set_value.py` (overrides and dirtying),
-`test_diddle.py` (scoped overrides), `test_cross_object.py` (edges reaching
-other objects), `test_stored.py` (the Stored marker), `test_namespace.py` and
-`test_store.py` (`ns`). Shared class factories are in `tests/helpers.py`; each
-test builds its own classes so nothing leaks between them, and the autouse
-`fresh_graph` fixture clears the default graph and namespace.
+Tests mirror the packages, one folder each:
+
+```
+tests/graph/     test_rewrite (the transform and its rejections), test_deps
+                 (graph shape), test_eval (order and memoisation), test_api
+                 (decorator surface), test_set_value (overrides and dirtying),
+                 test_diddle (scoped overrides), test_cross_object (edges
+                 reaching other objects), test_stored (the Stored marker)
+tests/ns/        test_namespace, test_store
+tests/analytics/ test_blackscholes (the pure maths), test_market and
+                 test_instrument (the /mkt and /inst objects),
+                 test_greeks_by_diddle (the recompute-set artefact)
+```
+
+Shared class factories are in `tests/helpers.py`; each test builds its own
+classes so nothing leaks between them, and the autouse `fresh_graph` fixture
+(in `tests/conftest.py`, so it covers every folder) clears the default graph,
+namespace and store (`graph.clear()`, `ns.clear()`, `ns.clear_store()`).
 
 The exception is the `McObject` classes in `helpers.py`, which are module level
 on purpose: a stored row names the class to rebuild, and a class defined inside

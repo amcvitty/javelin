@@ -5,8 +5,11 @@ level, so each test gets its own freshly compiled nodes and cannot be affected
 by cells another test left behind.
 """
 
+import contextlib
+import dataclasses
 import datetime
 
+import graph
 import ns
 from graph import node
 
@@ -213,6 +216,41 @@ def make_chooser():
             return self.item(self.which())
 
     return Chooser
+
+
+@contextlib.contextmanager
+def spy_bodies(evaluated, *classes):
+    """Record ``(object name, node name)`` each time a node *body* runs.
+
+    Needed where the fixture classes are the real module-level ones (a stored
+    row names its class), so a recording closure cannot be baked into the body
+    the way ``make_pricer`` does it. Wraps ``CompiledNode.impl`` -- which the
+    runtime reads fresh on every evaluate -- and puts it back on exit.
+    """
+    saved = []
+    for cls in classes:
+        for attr in vars(cls).values():
+            if not isinstance(attr, graph.Node):
+                continue
+            compiled = attr.compiled
+            assert compiled is not None  # set by __set_name__ at class creation
+            saved.append((attr, compiled))
+
+            def wrap(inner, name):
+                def impl(obj, key, ivs):
+                    evaluated.append((obj.name, name))
+                    return inner(obj, key, ivs)
+
+                return impl
+
+            attr.compiled = dataclasses.replace(
+                compiled, impl=wrap(compiled.impl, attr.__name__)
+            )
+    try:
+        yield
+    finally:
+        for attr, compiled in saved:
+            attr.compiled = compiled
 
 
 def make_fib(evaluated=None):
