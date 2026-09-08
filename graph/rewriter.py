@@ -50,8 +50,9 @@ def binding_counts(func_def):
     """How many times each name is bound in the body.
 
     Anything not in `Load` context is a binding: assignment targets, loop
-    variables, `with ... as`, comprehension and lambda parameters. A name bound
-    exactly once by a plain top-level assignment is a candidate for hoisting.
+    variables, `with ... as`, comprehension and lambda parameters. The names are
+    what a hoisted input cannot see; a name bound exactly once, by a plain
+    top-level assignment, is a candidate for hoisting.
     """
     counts = {}
     for n in ast.walk(func_def):
@@ -62,11 +63,6 @@ def binding_counts(func_def):
                 if isinstance(a, ast.arg):
                     counts[a.arg] = counts.get(a.arg, 0) + 1
     return counts
-
-
-def local_names(func_def):
-    """Names bound inside the body, which a hoisted input cannot see."""
-    return set(binding_counts(func_def))
 
 
 @dataclass(frozen=True)

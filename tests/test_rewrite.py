@@ -271,6 +271,35 @@ class TestHoistedLocals:
         assert graph.deps(calc.chained) == {(calc, Calc.base), (calc, Calc.at, 6.0)}
         assert calc.chained() == 6.0
 
+    def test_a_local_used_only_in_the_body_is_not_expanded_early(self):
+        evaluated = []
+
+        class Calc:
+            @node
+            def rate(self):
+                evaluated.append("rate")
+                return 0.05
+
+            @node
+            def years(self):
+                evaluated.append("years")
+                return 2.0
+
+            @node
+            def factor(self):
+                r = self.rate()
+                t = self.years()
+                return 1.0 + r * t
+
+        calc = Calc()
+        # Neither local shapes an edge, so expansion touches no body.
+        assert graph.deps(calc.factor) == {(calc, Calc.rate), (calc, Calc.years)}
+        assert evaluated == []
+        assert graph.code(Calc.factor) == (
+            "def factor(self, node, ivs):\n    return 1.0 + ivs[1] * ivs[3]"
+        )
+        assert calc.factor() == 1.1
+
     def test_a_local_can_appear_in_a_guard(self):
         class Calc:
             @node
