@@ -41,17 +41,7 @@ for obj, method, *args in sorted(
     shown = f"({', '.join(map(str, args))})" if args else ""
     print(f"    {obj.name}.{method.__name__}{shown}")
 
-# Setting spot on the shared market dirties both legs, and nothing else.
-print()
-print("Setting spot 100 -> 110 on the shared market...")
-mkt.spot.set_value(110.0)
-print("  a.pv dirty =", a.pv.is_dirty(), " b.pv dirty =", b.pv.is_dirty())
-print("  a.strike dirty =", a.strike.is_dirty())
-print("  Book PV =", round(book_pv(), 4))
-mkt.spot.clear_value()
-book_pv()  # settle back to the base value before the diddle demo
-
-# Delta by diddle: bump spot up and down, reprice, let the scope restore.
+# Delta by diddle: bump spot up and down, reprice, let each scope restore.
 s0 = mkt.spot()
 h = 1e-4 * s0
 with graph.diddle((mkt.spot, s0 + h)):
@@ -64,8 +54,17 @@ print()
 print(f"Book delta by diddle = {delta:.6f}")
 print(f"Book delta, N(d1)    = {analytic:.6f}")
 
-# Leaving the diddles restored the graph -- asking again recomputes nothing.
+# Leaving the diddles restored the graph -- nothing is left dirty.
 print("Dirty cells after the diddles:", graph.dirty())
+
+# Setting spot for real dirties both legs, and nothing else.
+print()
+print("Setting spot 100 -> 110 on the shared market...")
+mkt.spot.set_value(110.0)
+print("  a.pv dirty =", a.pv.is_dirty(), " b.pv dirty =", b.pv.is_dirty())
+print("  a.strike dirty =", a.strike.is_dirty())
+print("  Book PV =", round(book_pv(), 4))
+mkt.spot.clear_value()
 
 # Persist a leg and read it back into a fresh namespace.
 print()

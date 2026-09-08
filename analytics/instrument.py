@@ -20,6 +20,18 @@ from . import blackscholes
 _YEAR_DAYS = 365.0  # ACT/365. Day-count conventions proper are out of scope.
 
 
+def _year_fraction(today, expiry):
+    """ACT/365 time from ``today`` to ``expiry``, in years.
+
+    Takes the two dates already resolved -- the bodies call it as
+    ``_year_fraction(self.env().today(), self.expiry())`` so that ``today`` and
+    ``expiry`` stay real graph edges, while the ``.days / 365`` arithmetic
+    lives in one place. Where the result feeds a node-call argument the
+    rewriter still hoists the assignment into a ``Local`` (GEN-18).
+    """
+    return (expiry - today).days / _YEAR_DAYS
+
+
 class EuropeanOption(McObject):
     """A European call on one equity, named ``/inst/EQ/Option/<name>``."""
 
@@ -67,13 +79,13 @@ class EuropeanOption(McObject):
     @node
     def forward(self):
         """Forward price of the underlying at expiry, no dividends."""
-        tenor = (self.expiry() - self.env().today()).days / _YEAR_DAYS
+        tenor = _year_fraction(self.env().today(), self.expiry())
         return self.market().spot() * math.exp(self.curve().rate() * tenor)
 
     @node
     def d1(self):
         """Black-Scholes ``d1``."""
-        tenor = (self.expiry() - self.env().today()).days / _YEAR_DAYS
+        tenor = _year_fraction(self.env().today(), self.expiry())
         return blackscholes.d1(
             self.forward(), self.strike(), self.market().vol(), tenor
         )
@@ -81,7 +93,7 @@ class EuropeanOption(McObject):
     @node
     def d2(self):
         """Black-Scholes ``d2``."""
-        tenor = (self.expiry() - self.env().today()).days / _YEAR_DAYS
+        tenor = _year_fraction(self.env().today(), self.expiry())
         return blackscholes.d2(self.d1(), self.market().vol(), tenor)
 
     @node
@@ -93,8 +105,8 @@ class EuropeanOption(McObject):
         ``curve().discount_factor(tenor)``.
         """
         # TODO: branch on option_type() for puts once there is a put payoff.
-        tenor = (self.expiry() - self.env().today()).days / _YEAR_DAYS
-        discount_factor = self.curve().discount_factor(tenor)
+        tenor = _year_fraction(self.env().today(), self.expiry())
+        df = self.curve().discount_factor(tenor)
         return blackscholes.call_price_from_d(
-            self.forward(), self.strike(), discount_factor, self.d1(), self.d2()
+            self.forward(), self.strike(), df, self.d1(), self.d2()
         )

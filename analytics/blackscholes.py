@@ -9,6 +9,11 @@ European call, no carry beyond the risk-free rate (``q = 0``). The pieces are
 deliberately separate so a node can expose ``d1`` and ``d2`` as their own cells:
 
     forward -> d1 -> d2 -> price
+
+Callers guarantee ``tenor > 0``, ``vol > 0`` and ``forward > 0``: ``d1`` divides
+by ``vol * sqrt(tenor)`` and takes ``log(forward / strike)``, and does not guard
+against a degenerate market. An expired option is a payoff, not a Black-Scholes
+input.
 """
 
 import math

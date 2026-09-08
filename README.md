@@ -433,21 +433,27 @@ source code`.
 uv run ruff format      # standardise formatting
 uv run ruff check --fix # lint
 uv run ty check         # types
-uv run pytest -q        # 154 tests
+uv run pytest -q        # 158 tests
 ```
 
-Tests mirror the packages: `test_rewrite.py` (the transform and its rejections),
-`test_deps.py` (graph shape), `test_eval.py` (order and memoisation),
-`test_api.py` (decorator surface), `test_set_value.py` (overrides and dirtying),
-`test_diddle.py` (scoped overrides), `test_cross_object.py` (edges reaching
-other objects), `test_stored.py` (the Stored marker), `test_namespace.py` and
-`test_store.py` (`ns`), and for `analytics`: `test_blackscholes.py` (the pure
-maths), `test_market.py` and `test_instrument.py` (the `/mkt` and `/inst`
-objects), `test_greeks_by_diddle.py` (the recompute-set artefact). Shared class
-factories are in `tests/helpers.py`; each
-test builds its own classes so nothing leaks between them, and the autouse
-`fresh_graph` fixture clears the default graph, namespace and store
-(`graph.clear()`, `ns.clear()`, `ns.clear_store()`).
+Tests mirror the packages, one folder each:
+
+```
+tests/graph/     test_rewrite (the transform and its rejections), test_deps
+                 (graph shape), test_eval (order and memoisation), test_api
+                 (decorator surface), test_set_value (overrides and dirtying),
+                 test_diddle (scoped overrides), test_cross_object (edges
+                 reaching other objects), test_stored (the Stored marker)
+tests/ns/        test_namespace, test_store
+tests/analytics/ test_blackscholes (the pure maths), test_market and
+                 test_instrument (the /mkt and /inst objects),
+                 test_greeks_by_diddle (the recompute-set artefact)
+```
+
+Shared class factories are in `tests/helpers.py`; each test builds its own
+classes so nothing leaks between them, and the autouse `fresh_graph` fixture
+(in `tests/conftest.py`, so it covers every folder) clears the default graph,
+namespace and store (`graph.clear()`, `ns.clear()`, `ns.clear_store()`).
 
 The exception is the `McObject` classes in `helpers.py`, which are module level
 on purpose: a stored row names the class to rebuild, and a class defined inside

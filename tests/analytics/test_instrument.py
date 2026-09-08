@@ -9,6 +9,7 @@ import graph
 import ns
 from analytics import DiscountCurve, EuropeanOption, Market, PricingEnv
 from analytics import blackscholes as bs
+from analytics.instrument import _year_fraction
 from tests.helpers import spy_bodies
 
 
@@ -30,8 +31,9 @@ def _hand_price(spot, strike, rate, vol, tenor):
 
 class TestPrice:
     def test_pv_matches_black_scholes(self, market_data):
+        _, _, env = market_data
         opt = ns.lookup_or_new("/inst/EQ/Option/ACME-C95", EuropeanOption, strike=95.0)
-        tenor = (opt.expiry() - datetime.date(2026, 1, 1)).days / 365.0
+        tenor = _year_fraction(env.today(), opt.expiry())
         assert opt.pv() == pytest.approx(_hand_price(100.0, 95.0, 0.03, 0.2, tenor))
 
     def test_two_options_share_one_market_object(self, market_data):
@@ -42,7 +44,9 @@ class TestPrice:
 
 class TestGraphShape:
     def test_pv_dependencies(self, market_data):
+        _, _, env = market_data
         opt = ns.lookup_or_new("/inst/EQ/Option/A", EuropeanOption, strike=95.0)
+        tenor = _year_fraction(env.today(), opt.expiry())
         deps = {(obj.name, fn.__name__, *args) for obj, fn, *args in graph.deps(opt.pv)}
         assert deps == {
             ("/inst/EQ/Option/A", "forward"),
@@ -53,7 +57,7 @@ class TestGraphShape:
             ("/inst/EQ/Option/A", "env"),
             ("/inst/EQ/Option/A", "expiry"),
             ("/mkt/ENV/Default", "today"),
-            ("/mkt/IR/USD/Curve", "discount_factor", 1.0),
+            ("/mkt/IR/USD/Curve", "discount_factor", tenor),
         }
 
     def test_tenor_is_a_hoisted_local(self, market_data):
@@ -71,10 +75,16 @@ class TestGraphShape:
     def test_expanding_pv_runs_no_pricing_body(self, market_data):
         opt = ns.lookup_or_new("/inst/EQ/Option/A", EuropeanOption, strike=95.0)
         ran: list = []
-        with spy_bodies(ran, EuropeanOption):
+        with spy_bodies(ran, EuropeanOption, PricingEnv):
             graph.deps(opt.pv)
-        priced = {name for _, name in ran} & {"forward", "d1", "d2", "pv"}
-        assert priced == set()  # deps never runs the pricing chain
+        ran_names = {name for _, name in ran}
+
+        # The pricing chain stays cold...
+        assert ran_names & {"forward", "d1", "d2", "pv"} == set()
+        # ...but expansion *does* run expiry and today, because the tenor they
+        # feed decides which discount_factor cell pv depends on (the `needed`
+        # mechanism -- see README "When an edge's shape depends on a value").
+        assert {"expiry", "today"} <= ran_names
 
 
 class TestCrossObjectDirtying:
@@ -88,3 +98,17 @@ class TestCrossObjectDirtying:
         assert opt.pv.is_dirty()
         assert not opt.strike.is_dirty()
         assert opt.pv() > first  # a call is worth more with spot higher
+
+    def test_setting_today_dirties_the_option(self, market_data):
+        # `tenor` runs through the `_year_fraction` helper, but the dates it is
+        # given -- self.env().today() and self.expiry() -- stay real edges, so
+        # rolling the valuation date must still reprice.
+        _, _, env = market_data
+        opt = ns.lookup_or_new("/inst/EQ/Option/A", EuropeanOption, strike=95.0)
+        first = opt.pv()
+
+        env.today.set_value(datetime.date(2026, 7, 1))
+
+        assert opt.forward.is_dirty()
+        assert opt.pv.is_dirty()
+        assert opt.pv() < first  # less time value with expiry nearer
