@@ -13,6 +13,10 @@ import textwrap
 from .ir import CompiledNode, Edge, Value
 from .rewriter import Rewriter, impl_args, ivs_indices
 
+#: What the rewritten body is called inside the factory. Deliberately not the
+#: node's own name, which could be a free variable of the method as well.
+IMPL_NAME = "__impl"
+
 
 def _source_ast(func):
     """The function's own AST, with line numbers pointing back at the source."""
@@ -64,12 +68,17 @@ def _build_factory(func_def, edges, self_name, freevars):
     needed = set()
     for edge in edges:
         args = _edge_args(edge)
+        parts.append(ast.Lambda(args=impl_args(self_name), body=edge.receiver))
         parts.append(ast.Lambda(args=impl_args(self_name), body=args))
         parts.append(
             ast.Constant(value=None)
             if edge.guard is None
             else ast.Lambda(args=impl_args(self_name), body=edge.guard)
         )
+        # An input whose value is read to work out which cell this edge means
+        # -- through the object it is called on, or through its arguments --
+        # has to be evaluated during expansion, not just during evaluation.
+        needed |= ivs_indices(edge.receiver)
         needed |= ivs_indices(args)
         if edge.guard is not None:
             needed |= ivs_indices(edge.guard)
@@ -96,7 +105,7 @@ def _cell_contents(cell):
 def _exec_factory(module, func):
     """Run the factory, closed over the original method's free variables.
 
-    Returns the compiled body followed by an args/guard pair per edge.
+    Returns the compiled body followed by a receiver/args/guard triple per edge.
     """
     namespace = {}
     # Compiling the rewritten body is the whole point of the decorator: the
@@ -126,6 +135,10 @@ def compile_node(func, owner, is_node):
     func_def.returns = None
     code = ast.unparse(func_def)
 
+    # Renamed only now that the readable source has been taken: inside the
+    # factory the body is a nested def, which would shadow a free variable of
+    # the same name -- a node called `market` closing over a `market`.
+    func_def.name = IMPL_NAME
     module, needed = _build_factory(
         func_def, rewriter.edges, self_name, func.__code__.co_freevars
     )
@@ -134,11 +147,13 @@ def compile_node(func, owner, is_node):
     inputs: list[Value | Edge] = [
         Value(index=i, name=name) for name, i in params.items()
     ]
-    for edge, args, guard in zip(rewriter.edges, compiled[0::2], compiled[1::2]):
+    triples = zip(compiled[0::3], compiled[1::3], compiled[2::3])
+    for edge, (receiver, args, guard) in zip(rewriter.edges, triples):
         inputs.append(
             Edge(
                 index=edge.index,
                 target=edge.target,
+                receiver=receiver,
                 args=args,
                 guard=guard,
                 source=edge.source,

@@ -5,7 +5,9 @@ a cell in a spreadsheet: it has a value, and the engine knows what that value
 depends on **before** computing any of it.
 
 This is a reimplementation of the "grommit" dependency graph from
-Beacon/Clearwater, worked out from their public description.
+Beacon/Clearwater, worked out from their public description. `graph` is the
+engine; `ns` puts named objects on top of it, so cells on one object can depend
+on cells on another and be persisted.
 
 ```python
 class Sheet:
@@ -76,7 +78,7 @@ the bodies in the order `1, 0, 2, 3, 4, 5`.
 | **key** | How a cell is identified: the flat tuple `(object, method, *args)`. |
 | **terminal** | A constant. The node's own arguments; the key is implicitly the value. |
 | **`Value`** | An input that is one of the cell's arguments — a terminal. |
-| **`Edge`** | An input that is another cell. Carries `args` and `guard` as compiled `(self, node, ivs)` lambdas. |
+| **`Edge`** | An input that is another cell. Carries `receiver`, `args` and `guard` as compiled `(self, node, ivs)` lambdas. |
 | **guard** | The condition under which a call site is reached. `None` means unconditional. |
 | **`ivs`** | The input-value array a compiled body reads instead of parameters and node calls. |
 | **`needed`** | Indices whose *values* a later input reads (see below). |
@@ -165,6 +167,80 @@ The mutating methods on a bound node — `set_value`, `clear_value`, `is_dirty` 
 act on the default graph, as `__call__` does. Drive another `Graph` through
 `set_value(key, value)` and `diddle(...)` on the instance itself.
 
+## Depending on other objects
+
+A cell key is `(object, method, *args)`, so cells on different objects were
+never a problem — what was missing was a way for an *edge* to name an object
+other than `self`. `Edge.receiver` is that: a compiled lambda returning the
+object to call `target` on.
+
+```python
+@node
+def Strike(self):
+    return self.EquityObj().StockPrice()
+```
+
+```text
+ivs[0] = self.EquityObj()               <- Edge, receiver self
+ivs[1] = self.EquityObj().StockPrice()  <- Edge, receiver ivs[0]
+needed = {0}
+```
+
+Resolving *which object* is the same problem as resolving an edge's arguments,
+and uses the same machinery: the receiver expression is rewritten to read `ivs`,
+and the inputs it reads go into `needed` so expansion evaluates them. Finding
+`Strike`'s dependencies runs `EquityObj` — it has to, that is what names the
+cell — but not `StockPrice`.
+
+**Which calls become edges.** Any call whose receiver expression reads `self`.
+The receiver is resolved during expansion and then, if the attribute is a node,
+the input is a dependency; if it is not, it is an ordinary call:
+
+| Written | Becomes |
+|---|---|
+| `self.fib(n - 1)` | edge, receiver `self` |
+| `self.helper()`, where `helper` is not a node | left in the body |
+| `self.Market().spot()` | edge on the other object |
+| `self.ns['/Equities/ABC'].spot()` | edge on the looked-up object |
+| `self.Ticker().upper()` | edge's receiver is a cell; `.upper()` is a plain call |
+| `datetime.date.today()` | untouched |
+
+Because the receiver is an input like any other, it inherits the guard at its
+call site: inside an `if` that does not hold, neither the receiver nor the cell
+it names is a dependency.
+
+`self.ns` is the one member variable a node may read. It is permitted by name in
+`rewriter.PERMITTED_MEMBER` — `graph` does not import the `ns` package, so the
+layering is unchanged.
+
+## Stored nodes and the namespace
+
+The `ns` package puts objects in a namespace and persists them.
+
+```python
+class EquityMarket(McObject):
+    @node(node.Stored)
+    def StockPrice(self):
+        return 25.0
+
+
+mkt = ns.lookup_or_new("/Equities/ABC", EquityMarket, StockPrice=20.0)
+mkt.store()
+```
+
+- `@node(node.Stored)` marks a node as the object's persisted state. A stored
+  node **takes no parameters**: what is persisted is a cell, and only a zero-arg
+  node has one cell per object.
+- A `Namespace` is an **identity map** — one instance per name. A cell key holds
+  the object itself, so two instances for one name would fork the graph.
+- Keyword arguments to `new`/`lookup_or_new` are `set_value` calls, applied over
+  the class default or over what was loaded.
+- `store()` evaluates every stored node and writes the row: name, class, and a
+  JSON map of values. Loading sets those cells, so a reloaded object's bodies
+  never run and its stored cells have no dependencies.
+
+See [example_namespace.py](example_namespace.py) for the whole thing running.
+
 ## Layout
 
 ```
@@ -175,15 +251,25 @@ graph/
   runtime.py    make_key(), Graph, DEFAULT -- cells, deps, values, diddles
   node.py       Node descriptor, BoundNode, @node
   __init__.py   public API, bound to the default Graph
+
+ns/
+  mcobject.py   McObject -- a named object that can be persisted
+  namespace.py  Namespace, DEFAULT -- objects by name
+  store.py      SqliteStore and the JSON codec
+  __init__.py   public API, bound to the default Namespace
 ```
+
+`ns` depends on `graph`; nothing in `graph` imports `ns`.
 
 Imports run one way, `compiler -> ir <- runtime`, with `node` on top:
 
 - **`compiler`** holds everything that happens once per class. `compile_node`
   reads the source with `inspect.getsourcelines`, rewrites the AST, then builds
-  a `__make` factory containing the rewritten body plus two lambdas per edge
-  (its args, its guard) and `exec`s it. The factory exists so those lambdas
-  close over the *original method's* free variables.
+  a `__make` factory containing the rewritten body plus three lambdas per edge
+  (its receiver, its args, its guard) and `exec`s it. The factory exists so
+  those lambdas close over the *original method's* free variables. Inside it the
+  body is renamed to `__impl`: keeping the node's own name would shadow a free
+  variable called the same thing.
 - **`runtime`** holds everything that happens per cell. `Graph.expand` walks
   inputs for dependencies; `Graph.evaluate` walks them for values too. Both go
   through `_run_inputs`.
@@ -243,15 +329,16 @@ inputs?" first.
 | Pattern | Why |
 |---|---|
 | Node call in a loop or comprehension | Not one call site, so not one input. |
-| `self.x` member variables | A node may only see functions and constants. |
+| `self.x` member variables, except `self.ns` | A node may only see functions and constants. |
 | `self` used as a value | Would smuggle member access out to a helper. |
 | Node call argument using a body local | Inputs are hoisted, so they cannot see locals. |
 | Rebinding a parameter | Parameters are read-only inputs. |
+| A stored node with parameters | What is persisted is one cell per object. |
 | `async def`, `*args`/`**kwargs` at a call site | Not modelled. |
 
-Also not supported yet: calling a node on another object (`other.a()` stays
-inline as plain code — only `self.` receivers are node calls), and unhashable
-arguments.
+Also not supported: unhashable arguments, and a node reached through anything
+that does not read `self` — `other.a()`, where `other` is a local or a global,
+stays inline as plain code.
 
 Because compilation reads the method's own source, a node must be defined
 somewhere `inspect.getsourcelines` can find it. Classes defined in a REPL or
@@ -264,15 +351,21 @@ source code`.
 uv run ruff format      # standardise formatting
 uv run ruff check --fix # lint
 uv run ty check         # types
-uv run pytest -q        # 75 tests
+uv run pytest -q        # 117 tests
 ```
 
-Tests mirror the package: `test_rewrite.py` (the transform and its rejections),
+Tests mirror the packages: `test_rewrite.py` (the transform and its rejections),
 `test_deps.py` (graph shape), `test_eval.py` (order and memoisation),
 `test_api.py` (decorator surface), `test_set_value.py` (overrides and dirtying),
-`test_diddle.py` (scoped overrides). Shared class factories are in
-`tests/helpers.py`; each test builds its own classes so nothing leaks between
-them, and the autouse `fresh_graph` fixture clears the default graph.
+`test_diddle.py` (scoped overrides), `test_cross_object.py` (edges reaching
+other objects), `test_stored.py` (the Stored marker), `test_namespace.py` and
+`test_store.py` (`ns`). Shared class factories are in `tests/helpers.py`; each
+test builds its own classes so nothing leaks between them, and the autouse
+`fresh_graph` fixture clears the default graph and namespace.
+
+The exception is the `McObject` classes in `helpers.py`, which are module level
+on purpose: a stored row names the class to rebuild, and a class defined inside
+a test function cannot be found again by that name.
 
 The single most valuable assertion in the suite is in
 `test_deps_are_known_without_evaluating`:

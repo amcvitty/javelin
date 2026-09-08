@@ -27,16 +27,18 @@ class Value:
 
 @dataclass(frozen=True)
 class Edge:
-    """An input that is itself a cell, reached by calling `target` on the
-    same object.
+    """An input reached by calling `target` on the object `receiver` returns.
 
-    Which cell is only known once `args` is evaluated against the earlier
-    inputs, and only if `guard` (the condition under which the original call
-    site is reached) holds. Both are pure functions of (self, node, ivs).
+    Which cell is only known once `receiver` and `args` are evaluated against
+    the earlier inputs, and only if `guard` (the condition under which the
+    original call site is reached) holds. All three are pure functions of
+    (self, node, ivs); `receiver` returns `self` for an ordinary self.<node>()
+    call, and another object for a call reaching across the graph.
     """
 
     index: int
     target: str
+    receiver: object
     args: object
     guard: object
     source: str

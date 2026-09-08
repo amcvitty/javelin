@@ -131,10 +131,21 @@ class Graph:
                 continue
             if inp.guard is not None and not inp.guard(obj, key, ivs):
                 continue
+            # The object called is usually self, but an edge may reach across
+            # the graph to one another input produced. Looked up on that
+            # object's own type, so a subclass may override a node.
+            receiver = inp.receiver(obj, key, ivs)
+            target = getattr(type(receiver), inp.target, None)
             positional, keywords = inp.args(obj, key, ivs)
-            # Looked up on the object's own type, so a subclass may override
-            # a node.
-            dep = make_key(obj, getattr(type(obj), inp.target), positional, keywords)
+            if not hasattr(target, "compiled"):
+                # Not a node on this object after all: an ordinary call, which
+                # is a value rather than a cell.
+                if evaluate_all or inp.index in compiled.needed:
+                    ivs[inp.index] = getattr(receiver, inp.target)(
+                        *positional, **keywords
+                    )
+                continue
+            dep = make_key(receiver, target, positional, keywords)
             deps.append(dep)
             if evaluate_all or inp.index in compiled.needed:
                 ivs[inp.index] = self.evaluate(dep)

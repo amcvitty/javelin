@@ -54,8 +54,8 @@ Actual cache is
 roots (self and arguments)
 
 - Method invocations: self.Spot()
-- Compose: self.Ccy).YieldCurve()
-- Mappings: [p.Price() for p in self.Positions)]
+- Compose: self.Ccy().YieldCurve()
+- Mappings: [p.Price() for p in self.Positions()]
 - Conditionals: self.X() if self.A() else self.B()
 - Namespace refs: self.ns['/EnvPricing']
 - Expressions: self.fibonacci(n-1)

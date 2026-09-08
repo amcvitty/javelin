@@ -12,6 +12,11 @@ import contextlib
 import copy
 from dataclasses import dataclass
 
+# The only member variable a node may read. An object's namespace is fixed when
+# it is created, so reading it cannot smuggle mutable state past the graph.
+# Named rather than imported: `graph` knows nothing about the `ns` package.
+PERMITTED_MEMBER = "ns"
+
 
 def not_(expr):
     return ast.UnaryOp(op=ast.Not(), operand=expr)
@@ -126,6 +131,7 @@ class RawEdge:
 
     index: int
     target: str
+    receiver: ast.expr
     args: list
     keywords: list
     guard: ast.expr | None
@@ -183,12 +189,25 @@ class Rewriter(ast.NodeTransformer):
             and func_expr.value.id == self.self_name
         )
 
-    def _target(self, func_expr):
-        """The name of the node a call refers to, or None if not a node call."""
-        if not self._is_self_receiver(func_expr):
-            return None
-        attr = getattr(self.owner, func_expr.attr, None)
-        return func_expr.attr if self.is_node(attr) else None
+    def _reads_self(self, expr):
+        return any(
+            isinstance(n, ast.Name) and n.id == self.self_name for n in ast.walk(expr)
+        )
+
+    def _call_kind(self, func_expr: ast.Attribute):
+        """What a call site is, from the shape of the attribute being called.
+
+        "input"  -- an input: self.<node>(...), or a call on an object the
+                    graph produced, like self.Other().value(). Whether the
+                    latter names a node is only knowable once the receiver has
+                    been evaluated, so the runtime decides.
+        "plain"  -- self.<method>(...) where the method is not a node.
+        None     -- nothing to do with the graph.
+        """
+        if self._is_self_receiver(func_expr):
+            attr = getattr(self.owner, func_expr.attr, None)
+            return "input" if self.is_node(attr) else "plain"
+        return "input" if self._reads_self(func_expr.value) else None
 
     def _check_hoistable(self, expr, source):
         for n in ast.walk(expr):
@@ -224,6 +243,10 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_Attribute(self, node):
         if isinstance(node.value, ast.Name) and node.value.id == self.self_name:
+            if node.attr == PERMITTED_MEMBER:
+                # The one member a node may read: the object's namespace, which
+                # is fixed when the object is created.
+                return node
             raise ValueError(
                 f"{self.func.__name__}: reference to member variable "
                 f"{ast.unparse(node)}; only functions and constants may be "
@@ -232,13 +255,17 @@ class Rewriter(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_Call(self, node):
-        target = self._target(node.func)
-        if target is None:
-            if self._is_self_receiver(node.func):
-                # A plain method call stays in the body; only its arguments
-                # are rewritten.
-                return self._visit_arguments(node)
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            # Only a call on an attribute can name a node.
             return self.generic_visit(node)
+        kind = self._call_kind(func)
+        if kind is None:
+            return self.generic_visit(node)
+        if kind == "plain":
+            # A plain method call stays in the body; only its arguments are
+            # rewritten.
+            return self._visit_arguments(node)
 
         source = ast.unparse(node)
         if self.repeat:
@@ -251,9 +278,15 @@ class Rewriter(ast.NodeTransformer):
         ):
             raise ValueError(f"{source}: *args and **kwargs are not supported")
 
-        # Node calls nested in the arguments become inputs first.
+        # The object being called is resolved first, so a node call inside the
+        # receiver becomes an earlier input that this one refers to.
+        if self._is_self_receiver(func):
+            receiver = ast.Name(id=self.self_name, ctx=ast.Load())
+        else:
+            receiver = self.visit(func.value)
+        # Node calls nested in the arguments become inputs too.
         node = self._visit_arguments(node)
-        for expr in [*node.args, *(k.value for k in node.keywords)]:
+        for expr in [receiver, *node.args, *(k.value for k in node.keywords)]:
             self._check_hoistable(expr, source)
 
         guard = self.guards.current()
@@ -265,7 +298,8 @@ class Rewriter(ast.NodeTransformer):
         self.edges.append(
             RawEdge(
                 index=index,
-                target=target,
+                target=func.attr,
+                receiver=receiver,
                 args=node.args,
                 keywords=node.keywords,
                 guard=None if guard is None else guard.rewritten,

@@ -35,7 +35,7 @@ recomputation:
 """
 
 from .ir import CompiledNode, Edge, Value
-from .node import BoundNode, Node, node
+from .node import BoundNode, Marker, Node, Stored, node, stored_nodes
 from .runtime import DEFAULT, Graph, make_key
 
 __all__ = [
@@ -44,7 +44,9 @@ __all__ = [
     "CompiledNode",
     "Edge",
     "Graph",
+    "Marker",
     "Node",
+    "Stored",
     "Value",
     "all_nodes",
     "clear",
@@ -55,6 +57,7 @@ __all__ = [
     "inputs",
     "make_key",
     "node",
+    "stored_nodes",
 ]
 
 

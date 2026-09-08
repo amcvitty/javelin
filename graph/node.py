@@ -1,9 +1,25 @@
 """The @node decorator and the descriptor it puts on the class."""
 
 import functools
+from collections.abc import Callable
+from typing import Any, overload
 
 from .compiler import compile_node
 from .runtime import DEFAULT, make_key
+
+
+class Marker:
+    """A property a node is declared with, as in @node(node.Stored)."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __repr__(self):
+        return self.name
+
+
+#: Persist this node's value with its object. Stored nodes take no parameters.
+Stored = Marker("Stored")
 
 
 class BoundNode:
@@ -19,7 +35,7 @@ class BoundNode:
         self.__self__ = obj
         self.__doc__ = node.__doc__
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs) -> Any:
         return DEFAULT.evaluate(self.key(*args, **kwargs))
 
     def key(self, *args, **kwargs):
@@ -72,10 +88,11 @@ class Node:
     __name__: str
     __qualname__: str
 
-    def __init__(self, func):
+    def __init__(self, func, markers=()):
         self.func = func
         self.owner = None
         self.compiled = None
+        self.stored = Stored in markers
         functools.update_wrapper(self, func)
 
     def __set_name__(self, owner, name):
@@ -83,11 +100,26 @@ class Node:
         # source can be checked against it.
         self.owner = owner
         self.compiled = compile_node(self.func, owner, is_node)
+        if self.stored and self.compiled.signature.parameters:
+            raise ValueError(
+                f"stored node {name} takes parameters; what is persisted is a "
+                "cell, and only a node without parameters has one cell per "
+                "object"
+            )
 
-    def __get__(self, obj, objtype=None):
+    # Overloaded so that Calc.a is a Node and calc.a is a BoundNode, rather
+    # than the union of the two: a type checker must know that calc.a has
+    # set_value on it and takes the node's own arguments.
+    @overload
+    def __get__(self, obj: None, objtype: type | None = None) -> "Node": ...
+
+    @overload
+    def __get__(self, obj: object, objtype: type | None = None) -> "BoundNode": ...
+
+    def __get__(self, obj, objtype=None) -> "Node | BoundNode":
         return self if obj is None else BoundNode(self, obj)
 
-    def __call__(self, obj=None, *args, **kwargs):
+    def __call__(self, obj=None, *args, **kwargs) -> Any:
         if self.owner is None:
             raise TypeError(
                 f"@node {self.func.__name__} must be defined inside a class"
@@ -102,6 +134,52 @@ def is_node(obj):
     return isinstance(obj, Node)
 
 
-def node(func):
-    """Decorator marking a method as a node (a "cell") in the dependency graph."""
-    return Node(func)
+def stored_nodes(cls):
+    """The names of a class's stored nodes, base classes first."""
+    names = {}
+    for klass in reversed(cls.__mro__):
+        for name, attr in vars(klass).items():
+            if not isinstance(attr, Node):
+                continue
+            if attr.stored:
+                names[name] = None
+            else:
+                # An override that drops Stored drops it for the subclass.
+                names.pop(name, None)
+    return tuple(names)
+
+
+class _Decorator:
+    """The @node decorator.
+
+    An object rather than a function so that the markers it accepts hang off
+    it as real attributes: @node(node.Stored).
+    """
+
+    Stored = Stored
+
+    # Overloaded so that @node gives a Node, rather than the union of a Node
+    # and the decorator the marker form returns.
+    @overload
+    def __call__(self, func: Callable, /) -> Node: ...
+
+    @overload
+    def __call__(self, *markers: Marker) -> Callable[[Callable], Node]: ...
+
+    def __call__(self, *markers) -> "Node | Callable[[Callable], Node]":
+        """Mark a method as a node (a "cell") in the dependency graph.
+
+        Used bare as @node, or with markers as @node(node.Stored).
+        """
+        if len(markers) == 1 and not isinstance(markers[0], Marker):
+            return Node(markers[0])
+        unknown = [m for m in markers if not isinstance(m, Marker)]
+        if unknown:
+            raise TypeError(f"@node does not take {unknown[0]!r}")
+        return lambda func: Node(func, markers)
+
+    def __repr__(self):
+        return "<@node>"
+
+
+node = _Decorator()
