@@ -31,6 +31,7 @@ __all__ = [
     "SqliteStore",
     "all_objects",
     "clear",
+    "clear_store",
     "lookup_or_new",
     "new",
 ]
@@ -54,3 +55,8 @@ def all_objects():
 def clear():
     """Forget every object in the default namespace."""
     DEFAULT.clear()
+
+
+def clear_store():
+    """Forget every persisted object in the default namespace's store."""
+    DEFAULT.clear_store()

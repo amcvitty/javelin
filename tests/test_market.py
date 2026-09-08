@@ -8,14 +8,6 @@ import pytest
 import graph
 import ns
 from analytics import DiscountCurve, Market, PricingEnv
-from ns.store import SqliteStore
-
-
-@pytest.fixture
-def namespace(tmp_path):
-    """A namespace backed by its own sqlite file, so ``store()`` here cannot
-    leak into the shared default namespace other tests use."""
-    return ns.Namespace(SqliteStore(str(tmp_path / "objects.db")))
 
 
 class TestMarket:
@@ -72,20 +64,20 @@ class TestPricingEnv:
 
 
 class TestPersistence:
-    def test_round_trips_through_the_store(self, namespace):
-        m = namespace.lookup_or_new("/mkt/EQ/ACME/Market", Market, spot=111.0, vol=0.22)
-        c = namespace.lookup_or_new("/mkt/IR/USD/Curve", DiscountCurve, rate=0.04)
-        e = namespace.lookup_or_new("/mkt/ENV/Default", PricingEnv)
+    def test_round_trips_through_the_store(self):
+        m = ns.lookup_or_new("/mkt/EQ/ACME/Market", Market, spot=111.0, vol=0.22)
+        c = ns.lookup_or_new("/mkt/IR/USD/Curve", DiscountCurve, rate=0.04)
+        e = ns.lookup_or_new("/mkt/ENV/Default", PricingEnv)
         e.today.set_value(datetime.date(2026, 6, 30))
         for obj in (m, c, e):
             obj.store()
 
-        namespace.clear()
+        ns.clear()
         graph.clear()
 
-        m2 = namespace["/mkt/EQ/ACME/Market"]
-        c2 = namespace["/mkt/IR/USD/Curve"]
-        e2 = namespace["/mkt/ENV/Default"]
+        m2 = ns.DEFAULT["/mkt/EQ/ACME/Market"]
+        c2 = ns.DEFAULT["/mkt/IR/USD/Curve"]
+        e2 = ns.DEFAULT["/mkt/ENV/Default"]
         assert (m2.spot(), m2.vol()) == (111.0, 0.22)
         assert c2.rate() == 0.04
         assert e2.today() == datetime.date(2026, 6, 30)

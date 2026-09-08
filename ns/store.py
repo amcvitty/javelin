@@ -98,5 +98,10 @@ class SqliteStore:
         rows = self._db.execute("SELECT name FROM objects ORDER BY name")
         return tuple(name for (name,) in rows)
 
+    def clear(self):
+        """Forget every stored object. Mainly so a test starts from empty."""
+        self._db.execute("DELETE FROM objects")
+        self._db.commit()
+
     def close(self):
         self._db.close()

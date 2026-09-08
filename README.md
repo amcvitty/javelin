@@ -446,7 +446,8 @@ maths), `test_market.py` and `test_instrument.py` (the `/mkt` and `/inst`
 objects), `test_greeks_by_diddle.py` (the recompute-set artefact). Shared class
 factories are in `tests/helpers.py`; each
 test builds its own classes so nothing leaks between them, and the autouse
-`fresh_graph` fixture clears the default graph and namespace.
+`fresh_graph` fixture clears the default graph, namespace and store
+(`graph.clear()`, `ns.clear()`, `ns.clear_store()`).
 
 The exception is the `McObject` classes in `helpers.py`, which are module level
 on purpose: a stored row names the class to rebuild, and a class defined inside

@@ -117,3 +117,35 @@ class TestStoreDirectly:
         store.write("/a", Market, {"spot": 2.0})
 
         assert store.read("/a") == (Market, {"spot": 2.0})
+
+    def test_clear_forgets_everything(self):
+        _, Market = make_market_classes()
+        store = SqliteStore()
+        store.write("/a", Market, {"spot": 1.0})
+        store.write("/b", Market, {"spot": 2.0})
+
+        store.clear()
+
+        assert store.names() == ()
+        assert store.read("/a") is None
+
+
+class TestClearStore:
+    def test_clear_store_drops_persisted_objects(self, namespace):
+        _, Market = make_market_classes()
+        namespace.lookup_or_new("/Equities/ABC", Market, spot=20.0).store()
+        namespace.clear()
+
+        namespace.clear_store()
+
+        assert "/Equities/ABC" not in namespace
+        with pytest.raises(KeyError):
+            _ = namespace["/Equities/ABC"]
+
+    def test_plain_clear_still_leaves_the_store_alone(self, namespace):
+        _, Market = make_market_classes()
+        namespace.lookup_or_new("/Equities/ABC", Market, spot=20.0).store()
+
+        namespace.clear()
+
+        assert namespace["/Equities/ABC"].spot() == 20.0
