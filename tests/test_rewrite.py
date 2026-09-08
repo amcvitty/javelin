@@ -188,6 +188,164 @@ class TestRewrite:
         assert p.odd(4) is False
 
 
+class TestHoistedLocals:
+    """A plain intermediate assignment whose right-hand side uses only
+    parameters, earlier inputs and outside names is lifted above the body, so
+    it can fill a node call's argument."""
+
+    def test_a_local_can_feed_a_node_call_argument(self):
+        class Calc:
+            @node
+            def expiry(self):
+                return 2.0
+
+            @node
+            def rate(self, t):
+                return 0.05 * t
+
+            @node
+            def disc(self):
+                tenor = self.expiry() / 2.0
+                return self.rate(tenor)
+
+        calc = Calc()
+        kinds = [(type(i).__name__, str(i)) for i in graph.inputs(Calc.disc)]
+        assert kinds == [
+            ("Edge", "self.expiry()"),
+            ("Local", "tenor = self.expiry() / 2.0"),
+            ("Edge", "self.rate(tenor)"),
+        ]
+        # The assignment is gone from the body; it reads its ivs slot instead.
+        assert graph.code(Calc.disc) == "def disc(self, node, ivs):\n    return ivs[2]"
+        assert graph.deps(calc.disc) == {(calc, Calc.expiry), (calc, Calc.rate, 1.0)}
+        assert calc.disc() == 0.05
+
+    def test_dependencies_through_a_local_need_no_body(self):
+        evaluated = []
+
+        class Calc:
+            @node
+            def a(self):
+                evaluated.append("a")
+                return 3.0
+
+            @node
+            def b(self, x):
+                evaluated.append("b")
+                return x + 1
+
+            @node
+            def c(self):
+                k = self.a() + 1.0
+                return self.b(k)
+
+        calc = Calc()
+        assert graph.deps(calc.c) == {(calc, Calc.a), (calc, Calc.b, 4.0)}
+        # `a` is read to name b's cell, so expansion runs it; `b` never runs.
+        assert evaluated == ["a"]
+        assert calc.c() == 5.0
+
+    def test_locals_may_chain(self):
+        class Calc:
+            @node
+            def base(self):
+                return 10.0
+
+            @node
+            def at(self, x):
+                return x
+
+            @node
+            def chained(self):
+                half = self.base() / 2.0
+                shifted = half + 1.0
+                return self.at(shifted)
+
+        calc = Calc()
+        assert [str(i) for i in graph.inputs(Calc.chained)] == [
+            "self.base()",
+            "half = self.base() / 2.0",
+            "shifted = half + 1.0",
+            "self.at(shifted)",
+        ]
+        assert graph.deps(calc.chained) == {(calc, Calc.base), (calc, Calc.at, 6.0)}
+        assert calc.chained() == 6.0
+
+    def test_a_local_used_only_in_the_body_is_not_expanded_early(self):
+        evaluated = []
+
+        class Calc:
+            @node
+            def rate(self):
+                evaluated.append("rate")
+                return 0.05
+
+            @node
+            def years(self):
+                evaluated.append("years")
+                return 2.0
+
+            @node
+            def factor(self):
+                r = self.rate()
+                t = self.years()
+                return 1.0 + r * t
+
+        calc = Calc()
+        # Neither local shapes an edge, so expansion touches no body.
+        assert graph.deps(calc.factor) == {(calc, Calc.rate), (calc, Calc.years)}
+        assert evaluated == []
+        assert graph.code(Calc.factor) == (
+            "def factor(self, node, ivs):\n    return 1.0 + ivs[1] * ivs[3]"
+        )
+        assert calc.factor() == 1.1
+
+    def test_a_local_can_appear_in_a_guard(self):
+        class Calc:
+            @node
+            def threshold(self):
+                return 1.0
+
+            @node
+            def spot(self):
+                return 5.0
+
+            @node
+            def item(self, n):
+                return n * 10
+
+            @node
+            def pick(self):
+                limit = self.threshold() * 2.0
+                return self.item(1) if self.spot() > limit else 0.0
+
+        calc = Calc()
+        assert graph.deps(calc.pick) == {
+            (calc, Calc.threshold),
+            (calc, Calc.spot),
+            (calc, Calc.item, 1),
+        }
+        assert calc.pick() == 10
+
+    def test_an_unhoistable_local_still_stays_in_the_body(self):
+        class Calc:
+            @node
+            def leaf(self):
+                return 2.0
+
+            @node
+            def total(self):
+                acc = 0.0
+                for _ in range(3):
+                    acc = acc + 1.0
+                return self.leaf() + acc
+
+        calc = Calc()
+        assert [str(i) for i in graph.inputs(Calc.total)] == ["self.leaf()"]
+        assert "acc" in graph.code(Calc.total)
+        assert calc.total() == 5.0
+
+
 class TestUnsupported:
     """Patterns that cannot be turned into a fixed list of inputs, or that
     would let a node see more than functions and constants, fail when the
@@ -227,7 +385,9 @@ class TestUnsupported:
                         acc += self.a()
                     return acc
 
-    def test_node_call_whose_argument_is_a_local(self):
+    def test_node_call_whose_argument_is_a_local_bound_more_than_once(self):
+        # A singly-bound top-level assignment is hoisted (see
+        # TestHoistedLocals); one rebound, or bound under a branch, cannot be.
         with pytest.raises(ValueError, match="local 'x'"):
 
             class Calc:
@@ -238,7 +398,33 @@ class TestUnsupported:
                 @node
                 def answer(self):
                     x = 3
+                    x = x + 1
                     return self.double(x)
+
+    def test_node_call_whose_argument_is_a_conditionally_bound_local(self):
+        # Reached only when the early return did not fire, so it cannot be
+        # hoisted above the body unconditionally.
+        with pytest.raises(ValueError, match="local 't'"):
+
+            class Calc:
+                @node
+                def flag(self):
+                    return True
+
+                @node
+                def base(self):
+                    return 10.0
+
+                @node
+                def use(self, x):
+                    return x
+
+                @node
+                def guarded(self):
+                    if self.flag():
+                        return 0.0
+                    t = self.base() + 1.0
+                    return self.use(t)
 
     def test_rebinding_a_parameter(self):
         with pytest.raises(ValueError, match="rebound"):

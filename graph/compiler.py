@@ -10,7 +10,7 @@ import ast
 import inspect
 import textwrap
 
-from .ir import CompiledNode, Edge, Value
+from .ir import CompiledNode, Edge, Local, Value
 from .rewriter import Rewriter, impl_args, ivs_indices
 
 #: What the rewritten body is called inside the factory. Deliberately not the
@@ -58,11 +58,13 @@ def _edge_args(edge):
     )
 
 
-def _build_factory(func_def, edges, self_name, freevars):
-    """Wrap the rewritten body and the per-edge lambdas in a `__make` factory.
+def _build_factory(func_def, edges, raw_locals, self_name, freevars):
+    """Wrap the rewritten body, per-edge lambdas and per-local lambdas in a
+    `__make` factory.
 
     Returns the module and the set of inputs whose *values* some edge reads to
-    work out which cell it refers to.
+    work out which cell it refers to -- widened to the transitive closure
+    through any hoisted local an edge reaches.
     """
     parts: list[ast.expr] = [ast.Name(id=func_def.name, ctx=ast.Load())]
     needed = set()
@@ -82,6 +84,19 @@ def _build_factory(func_def, edges, self_name, freevars):
         needed |= ivs_indices(args)
         if edge.guard is not None:
             needed |= ivs_indices(edge.guard)
+    for local in raw_locals:
+        parts.append(ast.Lambda(args=impl_args(self_name), body=local.value))
+
+    # A hoisted local is only worth evaluating during expansion when something
+    # that shapes the graph reads it -- and then the inputs *it* reads matter
+    # too, recursively.
+    local_reads = {local.index: ivs_indices(local.value) for local in raw_locals}
+    pending = list(needed)
+    while pending:
+        for dep in local_reads.get(pending.pop(), ()):
+            if dep not in needed:
+                needed.add(dep)
+                pending.append(dep)
 
     factory = ast.FunctionDef(
         name="__make",
@@ -129,7 +144,7 @@ def compile_node(func, owner, is_node):
     func_def = _source_ast(func)
 
     rewriter = Rewriter(func, owner, self_name, params, func_def, is_node)
-    func_def.body = rewriter.visit_block(func_def.body)
+    func_def.body = rewriter.visit_body(func_def.body)
     func_def.args = impl_args(self_name)
     func_def.decorator_list = []
     func_def.returns = None
@@ -140,14 +155,23 @@ def compile_node(func, owner, is_node):
     # the same name -- a node called `market` closing over a `market`.
     func_def.name = IMPL_NAME
     module, needed = _build_factory(
-        func_def, rewriter.edges, self_name, func.__code__.co_freevars
+        func_def,
+        rewriter.edges,
+        rewriter.raw_locals,
+        self_name,
+        func.__code__.co_freevars,
     )
     impl, *compiled = _exec_factory(module, func)
 
-    inputs: list[Value | Edge] = [
+    # `compiled` is a (receiver, args, guard) triple per edge, then one lambda
+    # per hoisted local, in the order the factory built them.
+    edge_parts = compiled[: 3 * len(rewriter.edges)]
+    local_parts = compiled[3 * len(rewriter.edges) :]
+
+    inputs: list[Value | Edge | Local] = [
         Value(index=i, name=name) for name, i in params.items()
     ]
-    triples = zip(compiled[0::3], compiled[1::3], compiled[2::3])
+    triples = zip(edge_parts[0::3], edge_parts[1::3], edge_parts[2::3])
     for edge, (receiver, args, guard) in zip(rewriter.edges, triples):
         inputs.append(
             Edge(
@@ -159,6 +183,16 @@ def compile_node(func, owner, is_node):
                 source=edge.source,
             )
         )
+    for local, expr in zip(rewriter.raw_locals, local_parts):
+        inputs.append(
+            Local(
+                index=local.index,
+                name=local.name,
+                expr=expr,
+                source=local.source,
+            )
+        )
+    inputs.sort(key=lambda inp: inp.index)
 
     return CompiledNode(
         impl=impl,

@@ -11,6 +11,7 @@ graph can be built without evaluating anything.
 """
 
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -23,6 +24,26 @@ class Value:
 
     def __str__(self):
         return self.name
+
+
+@dataclass(frozen=True)
+class Local:
+    """An intermediate hoisted out of the body and above it.
+
+    A plain `name = <expr>` assignment whose right-hand side, once rewritten,
+    reads only the node's parameters, earlier inputs and names from outside the
+    method. It fills an `ivs` slot exactly like an argument expression does, so
+    a later edge's arguments or guard may refer to it. `expr` is a pure function
+    of `(self, node, ivs)`; the input adds no dependency of its own.
+    """
+
+    index: int
+    name: str
+    expr: Callable[..., object]  # (self, node, ivs) -> the intermediate's value
+    source: str
+
+    def __str__(self):
+        return f"{self.name} = {self.source}"
 
 
 @dataclass(frozen=True)

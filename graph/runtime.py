@@ -13,7 +13,7 @@ temporary: the scope remembers what it displaced and puts it back on exit.
 
 import contextlib
 
-from .ir import Value
+from .ir import Local, Value
 
 _MISSING = object()
 
@@ -123,11 +123,17 @@ class Graph:
         """
         obj, node, *args = key
         compiled = node.compiled
-        ivs = [None] * len(compiled.inputs)
+        ivs: list[object] = [None] * len(compiled.inputs)
         deps = []
         for inp in compiled.inputs:
             if isinstance(inp, Value):
                 ivs[inp.index] = args[inp.index]
+                continue
+            if isinstance(inp, Local):
+                # A hoisted intermediate: a value, never a dependency. Evaluated
+                # during expansion only if a later input's shape reads it.
+                if evaluate_all or inp.index in compiled.needed:
+                    ivs[inp.index] = inp.expr(obj, key, ivs)
                 continue
             if inp.guard is not None and not inp.guard(obj, key, ivs):
                 continue
