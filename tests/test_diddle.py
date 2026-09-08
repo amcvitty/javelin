@@ -78,6 +78,43 @@ class TestDiddle:
         assert c.pick() == 10
         assert graph.deps(c.pick) == {(c, Chooser.which), (c, Chooser.item, 1)}
 
+    def test_a_diddle_through_a_hoisted_local_restores_shape_and_costs_nothing(self):
+        from graph import node
+
+        evaluated = []
+
+        class Book:
+            @node
+            def which(self):
+                return 1
+
+            @node
+            def leg(self, n):
+                evaluated.append(f"leg({n})")
+                return n * 100
+
+            @node
+            def pv(self):
+                # `pick` is a hoisted local feeding an edge argument, so the
+                # diddle changes which cell `leg` names, not just a number.
+                evaluated.append("pv")
+                pick = self.which() + 1
+                return self.leg(pick)
+
+        b = Book()
+        assert b.pv() == 200
+        evaluated.clear()
+
+        with graph.diddle((b.which, 4)):
+            assert b.pv() == 500
+            assert (b, Book.leg, 5) in graph.deps(b.pv)
+        assert evaluated == ["leg(5)", "pv"]
+
+        evaluated.clear()
+        assert b.pv() == 200
+        assert evaluated == []
+        assert graph.deps(b.pv) == {(b, Book.which), (b, Book.leg, 2)}
+
 
 class TestNesting:
     def test_an_inner_diddle_shadows_the_outer_one(self):

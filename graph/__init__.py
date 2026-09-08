@@ -34,7 +34,7 @@ recomputation:
     note.pv()          # pre-diddle value, straight from the restored cache
 """
 
-from .ir import CompiledNode, Edge, Value
+from .ir import CompiledNode, Edge, Local, Value
 from .node import BoundNode, Marker, Node, Stored, node, stored_nodes
 from .runtime import DEFAULT, Graph, make_key
 
@@ -44,6 +44,7 @@ __all__ = [
     "CompiledNode",
     "Edge",
     "Graph",
+    "Local",
     "Marker",
     "Node",
     "Stored",

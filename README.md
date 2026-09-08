@@ -79,6 +79,7 @@ the bodies in the order `1, 0, 2, 3, 4, 5`.
 | **terminal** | A constant. The node's own arguments; the key is implicitly the value. |
 | **`Value`** | An input that is one of the cell's arguments — a terminal. |
 | **`Edge`** | An input that is another cell. Carries `receiver`, `args` and `guard` as compiled `(self, node, ivs)` lambdas. |
+| **`Local`** | An input that is a body intermediate hoisted above the body. A `(self, node, ivs)` lambda, no dependency of its own (see "Intermediate locals"). |
 | **guard** | The condition under which a call site is reached. `None` means unconditional. |
 | **`ivs`** | The input-value array a compiled body reads instead of parameters and node calls. |
 | **`needed`** | Indices whose *values* a later input reads (see below). |
@@ -245,8 +246,8 @@ See [example_namespace.py](example_namespace.py) for the whole thing running.
 
 ```
 graph/
-  ir.py         Value, Edge, CompiledNode -- the compiled form
-  rewriter.py   Guard, GuardStack, RawEdge, Rewriter -- the AST transform
+  ir.py         Value, Edge, Local, CompiledNode -- the compiled form
+  rewriter.py   Guard, GuardStack, RawEdge, RawLocal, Rewriter -- the AST transform
   compiler.py   compile_node(): source -> CompiledNode
   runtime.py    make_key(), Graph, DEFAULT -- cells, deps, values, diddles
   node.py       Node descriptor, BoundNode, @node
@@ -320,6 +321,35 @@ guard pushed mid-block by an early return corrupted the accounting and produced
 returned `None`. The graph was wrong, not loud. See
 `test_guards_do_not_leak_out_of_a_nested_block`.
 
+## Intermediate locals
+
+Inputs are hoisted above the body, so an input expression cannot read a body
+local. But a plain intermediate can be hoisted too, if its right-hand side only
+uses things an input may already use:
+
+```python
+@node
+def price(self):
+    tenor = self.expiry() / 2.0  # hoisted: reads an earlier input
+    return self.curve().discount(tenor)  # ...so it can fill this argument
+```
+
+`tenor` becomes a third input kind alongside `Value` and `Edge` — a `Local`,
+carrying a `(self, node, ivs)` lambda and no dependency of its own. It takes an
+`ivs` slot in source order, and later inputs (arguments, guards, receivers, and
+other locals) refer to it as `ivs[k]`. `graph.inputs(...)` lists it as
+`tenor = self.expiry() / 2.0`; `graph.code(...)` shows the body reading `ivs[k]`
+with the assignment gone.
+
+An assignment is hoisted only when it is a single bare `name =` target, bound
+exactly once in the whole body, and reached unconditionally. Anything else — a
+name that is rebound, one assigned under an `if`, a tuple unpack, or a
+right-hand side that reads a local which itself could not be hoisted — stays in
+the body, and a node call whose argument uses it still raises. `needed` is
+widened transitively through hoisted locals, so a local an edge's shape depends
+on is still evaluated during expansion, and a diddle that changes such a local
+restores the graph shape on exit like any other.
+
 ## Deliberately unsupported
 
 These raise `ValueError` when the class is created, rather than building a wrong
@@ -331,7 +361,7 @@ inputs?" first.
 | Node call in a loop or comprehension | Not one call site, so not one input. |
 | `self.x` member variables, except `self.ns` | A node may only see functions and constants. |
 | `self` used as a value | Would smuggle member access out to a helper. |
-| Node call argument using a body local | Inputs are hoisted, so they cannot see locals. |
+| Node call argument using a non-hoistable local | Inputs are hoisted; a local that is rebound, conditional, or reads another such local cannot come with them (see above). |
 | Rebinding a parameter | Parameters are read-only inputs. |
 | A stored node with parameters | What is persisted is one cell per object. |
 | `async def`, `*args`/`**kwargs` at a call site | Not modelled. |
@@ -351,7 +381,7 @@ source code`.
 uv run ruff format      # standardise formatting
 uv run ruff check --fix # lint
 uv run ty check         # types
-uv run pytest -q        # 117 tests
+uv run pytest -q        # 123 tests
 ```
 
 Tests mirror the packages: `test_rewrite.py` (the transform and its rejections),

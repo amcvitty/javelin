@@ -46,15 +46,27 @@ def ivs_indices(expr):
     }
 
 
-def local_names(func_def):
-    """Names bound inside the body, which a hoisted input cannot see."""
-    names = set()
+def binding_counts(func_def):
+    """How many times each name is bound in the body.
+
+    Anything not in `Load` context is a binding: assignment targets, loop
+    variables, `with ... as`, comprehension and lambda parameters. A name bound
+    exactly once by a plain top-level assignment is a candidate for hoisting.
+    """
+    counts = {}
     for n in ast.walk(func_def):
         if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
-            names.add(n.id)
+            counts[n.id] = counts.get(n.id, 0) + 1
         elif isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not func_def:
-            names.update(a.arg for a in ast.walk(n.args) if isinstance(a, ast.arg))
-    return names
+            for a in ast.walk(n.args):
+                if isinstance(a, ast.arg):
+                    counts[a.arg] = counts.get(a.arg, 0) + 1
+    return counts
+
+
+def local_names(func_def):
+    """Names bound inside the body, which a hoisted input cannot see."""
+    return set(binding_counts(func_def))
 
 
 @dataclass(frozen=True)
@@ -138,6 +150,20 @@ class RawEdge:
     source: str
 
 
+@dataclass
+class RawLocal:
+    """A body assignment lifted above the body, before it is compiled.
+
+    `value` is the right-hand side already rewritten to read `ivs`; `source` is
+    the original right-hand side, kept for `str(Local)`.
+    """
+
+    index: int
+    name: str
+    value: ast.expr
+    source: str
+
+
 class Rewriter(ast.NodeTransformer):
     """Replace parameters and node calls with ivs[i], collecting an input
     input for each, together with the guard under which it is reached."""
@@ -162,10 +188,15 @@ class Rewriter(ast.NodeTransformer):
         self.params = params  # name -> ivs index
         self.is_node = is_node  # supplied by the decorator, to avoid a cycle
         self.edges = []
+        self.raw_locals = []  # RawLocal per hoisted assignment, in source order
+        self.hoisted = {}  # name -> ivs index, for a lifted assignment
         self.guards = GuardStack()
         self.repeat = 0  # >0 while inside a loop, comprehension or lambda
         self.if_tests = {}  # id(If) -> Guard for its test
-        self.locals = local_names(func_def)
+        self._top_body = False  # True only while visiting the function's own body
+        self._next_index = len(params)  # next free ivs slot, for edges and locals
+        self._binding_counts = binding_counts(func_def)
+        self.locals = set(self._binding_counts)
         rebound = sorted(set(params) & self.locals)
         if rebound:
             raise ValueError(
@@ -174,6 +205,12 @@ class Rewriter(ast.NodeTransformer):
             )
 
     # -- helpers -----------------------------------------------------------
+
+    def _alloc(self):
+        """Claim the next ivs slot, shared by edges and hoisted locals."""
+        index = self._next_index
+        self._next_index += 1
+        return index
 
     def _ivs(self, index):
         return ast.Subscript(
@@ -211,7 +248,11 @@ class Rewriter(ast.NodeTransformer):
 
     def _check_hoistable(self, expr, source):
         for n in ast.walk(expr):
-            if isinstance(n, ast.Name) and n.id in self.locals:
+            if (
+                isinstance(n, ast.Name)
+                and n.id in self.locals
+                and n.id not in self.hoisted
+            ):
                 raise ValueError(
                     f"input {source!r} refers to local {n.id!r}; an input may "
                     "only use the node's parameters, earlier inputs and names "
@@ -237,6 +278,8 @@ class Rewriter(ast.NodeTransformer):
                 f"{self.func.__name__}: {node.id!r} may only be used to call a "
                 f"method, as {node.id}.<method>(...)"
             )
+        if node.id in self.hoisted:
+            return ast.copy_location(self._ivs(self.hoisted[node.id]), node)
         if node.id not in self.params:
             return node
         return ast.copy_location(self._ivs(self.params[node.id]), node)
@@ -294,7 +337,7 @@ class Rewriter(ast.NodeTransformer):
             self._check_hoistable(guard.rewritten, source)
             source = f"{source} if {ast.unparse(guard.original)}"
 
-        index = len(self.params) + len(self.edges)
+        index = self._alloc()
         self.edges.append(
             RawEdge(
                 index=index,
@@ -308,11 +351,55 @@ class Rewriter(ast.NodeTransformer):
         )
         return ast.copy_location(self._ivs(index), node)
 
+    def visit_body(self, stmts):
+        """Visit the function's own body, where assignments may be hoisted."""
+        self._top_body = True
+        return self.visit_block(stmts)
+
+    def _hoist_candidate(self, stmt):
+        """The name of a plain assignment eligible to be lifted, or None.
+
+        Eligible means: a single bare `name =` target, bound nowhere else in the
+        body, not a parameter, and reached unconditionally. Whether its
+        right-hand side is actually hoistable is decided after it is rewritten.
+        """
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            return None
+        target = stmt.targets[0]
+        if not isinstance(target, ast.Name) or target.id in self.params:
+            return None
+        if self._binding_counts.get(target.id, 0) != 1:
+            return None
+        if self.guards.current() is not None:
+            return None
+        return target.id
+
+    def _reads_local(self, expr):
+        """Whether a rewritten expression still refers to a body local."""
+        return any(
+            isinstance(n, ast.Name) and n.id in self.locals and n.id not in self.hoisted
+            for n in ast.walk(expr)
+        )
+
     def visit_block(self, stmts):
         """Visit a statement list, guarding whatever follows an early return."""
         out = []
+        top, self._top_body = self._top_body, False
         with self.guards.scope():
             for stmt in stmts:
+                if top and (name := self._hoist_candidate(stmt)) is not None:
+                    source = ast.unparse(stmt.value)
+                    value = self.visit(stmt.value)
+                    if self._reads_local(value):
+                        # Depends on a local that stays in the body, so this one
+                        # must too. Its right-hand side is already rewritten.
+                        stmt.value = value
+                        out.append(stmt)
+                    else:
+                        index = self._alloc()
+                        self.hoisted[name] = index
+                        self.raw_locals.append(RawLocal(index, name, value, source))
+                    continue
                 visited = self.visit(stmt)
                 out.append(visited)
                 if not isinstance(visited, ast.If):
