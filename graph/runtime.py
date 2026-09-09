@@ -53,6 +53,55 @@ def make_key(obj, node, args=(), kwargs=None):
     return (obj, node, *bound.arguments.values())
 
 
+class _BiMultiMap:
+    """A many-to-many relation kept navigable from both ends at once.
+
+    `points_at(key)` is the frozenset `key` maps to; `readers_of(key)` is every
+    key whose set contains it. Only `set` and `discard` write, and each fixes
+    both directions, so the forward and reverse views cannot drift out of step
+    -- which is the whole reason this is one object rather than two dicts.
+    """
+
+    def __init__(self):
+        self._forward = {}  # key -> frozenset it maps to
+        self._reverse = {}  # key -> set of keys that map to it
+
+    def __contains__(self, key):
+        return key in self._forward
+
+    def points_at(self, key):
+        """What `key` maps to, or an empty frozenset."""
+        return self._forward.get(key, frozenset())
+
+    def readers_of(self, key):
+        """The keys that map to `key`. Live -- iterate it, do not mutate it."""
+        return self._reverse.get(key, frozenset())
+
+    def set(self, key, targets):
+        """Point `key` at `targets` (a frozenset), adjusting the reverse view."""
+        old = self._forward.get(key, frozenset())
+        for gone in old - targets:
+            readers = self._reverse[gone]
+            readers.discard(key)
+            if not readers:
+                del self._reverse[gone]
+        for added in targets - old:
+            self._reverse.setdefault(added, set()).add(key)
+        self._forward[key] = targets
+
+    def discard(self, key):
+        """Drop `key`'s forward entry. Keys that map *to* it are left alone."""
+        for gone in self._forward.pop(key, frozenset()):
+            readers = self._reverse[gone]
+            readers.discard(key)
+            if not readers:
+                del self._reverse[gone]
+
+    def clear(self):
+        self._forward.clear()
+        self._reverse.clear()
+
+
 class Graph:
     """A set of cells and their memoised values.
 
@@ -61,12 +110,11 @@ class Graph:
     """
 
     def __init__(self):
-        self._deps = {}  # key -> frozenset of dependency keys, once expanded
+        self._deps = _BiMultiMap()  # cell -> deps, navigable back to readers too
         self._known = set()  # every key referenced, expanded or not
         self._values = {}  # key -> memoised result
         self._overrides = {}  # key -> value set directly; the body never runs
         self._dirty = set()  # keys whose memoised value is stale
-        self._dependents = {}  # dep key -> set of keys that read it; tracks _deps
         self._layers = []  # stack of open diddle scopes
 
     # -- exploring ---------------------------------------------------------
@@ -104,7 +152,6 @@ class Graph:
         self._values.clear()
         self._overrides.clear()
         self._dirty.clear()
-        self._dependents.clear()
         self._layers.clear()
 
     # -- building and evaluating -------------------------------------------
@@ -118,7 +165,7 @@ class Graph:
             # A dirty cell is re-expanded: a changed value can reach an edge's
             # arguments or guard, and so change the shape of the graph.
             self._record(key, self._run_inputs(key, evaluate_all=False)[0])
-        return self._deps[key]
+        return self._deps.points_at(key)
 
     def evaluate(self, key):
         """This cell's value, evaluating its dependencies first."""
@@ -136,34 +183,9 @@ class Graph:
 
     def _record(self, key, deps):
         self._touch(key)
-        self._set_deps(key, deps)
+        self._deps.set(key, deps)
         self._known.add(key)
         self._known.update(deps)
-
-    def _set_deps(self, key, deps):
-        """Point this cell at `deps`, or drop the entry when `deps` is _MISSING.
-
-        The sole writer of `_deps`, so the reverse index in `_dependents` is
-        kept in step here -- one cell's worth of work -- rather than rebuilt
-        from the whole graph every time a value is set.
-        """
-        was = self._deps.get(key, _MISSING)
-        old = () if was is _MISSING else was
-        new = () if deps is _MISSING else deps
-        for dep in old:
-            if dep not in new:
-                readers = self._dependents.get(dep)
-                if readers is not None:
-                    readers.discard(key)
-                    if not readers:
-                        del self._dependents[dep]
-        for dep in new:
-            if dep not in old:
-                self._dependents.setdefault(dep, set()).add(key)
-        if deps is _MISSING:
-            self._deps.pop(key, None)
-        else:
-            self._deps[key] = deps
 
     def _run_inputs(self, key, evaluate_all):
         """Walk a cell's inputs in order, resolving each dependency.
@@ -245,10 +267,10 @@ class Graph:
     def _dirty_from(self, key):
         """Mark everything that depends on this cell, transitively, as dirty.
 
-        Walks only the dependent cone, off the `_dependents` index, so the cost
-        of setting a value is independent of the size of the rest of the graph.
+        Walks only the dependent cone, following `_deps` back from readers to
+        readers, so the cost is independent of the size of the rest of the graph.
         """
-        pending = list(self._dependents.get(key, ()))
+        pending = list(self._deps.readers_of(key))
         while pending:
             dependent = pending.pop()
             if dependent in self._dirty or dependent in self._overrides:
@@ -257,7 +279,7 @@ class Graph:
                 continue
             self._touch(dependent)
             self._dirty.add(dependent)
-            pending.extend(self._dependents.get(dependent, ()))
+            pending.extend(self._deps.readers_of(dependent))
 
     # -- diddle scopes -----------------------------------------------------
 
@@ -286,7 +308,7 @@ class Graph:
         if self._layers and key not in self._layers[-1]:
             self._layers[-1][key] = (
                 self._values.get(key, _MISSING),
-                self._deps.get(key, _MISSING),
+                self._deps.points_at(key) if key in self._deps else _MISSING,
                 key in self._dirty,
                 self._overrides.get(key, _MISSING),
             )
@@ -300,7 +322,10 @@ class Graph:
         """
         for key, (value, deps, was_dirty, override) in saved.items():
             _restore_entry(self._values, key, value)
-            self._set_deps(key, deps)  # reverts the reverse index too
+            if deps is _MISSING:
+                self._deps.discard(key)  # drops the reverse edges too
+            else:
+                self._deps.set(key, deps)  # reverts the reverse edges too
             _restore_entry(self._overrides, key, override)
             if was_dirty:
                 self._dirty.add(key)

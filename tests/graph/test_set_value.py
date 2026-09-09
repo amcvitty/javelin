@@ -145,35 +145,32 @@ class TestChangingGraphShape:
         assert graph.deps(c.pick) == {(c, Chooser.which), (c, Chooser.item, 3)}
 
 
-class _CountingDict(dict):
-    """A dict that counts full-table scans through `.items()`."""
-
-    scans = 0
-
-    def items(self):
-        self.scans += 1
-        return super().items()
-
-
 class TestScaling:
     """Setting a value costs the dependent cone, not the whole graph."""
 
-    def test_setting_a_value_does_not_scan_the_whole_dependency_table(
-        self, monkeypatch
-    ):
-        # A large graph unrelated to the cell being set. Dirtying walks the
-        # maintained reverse index, so it must not pay to iterate all of _deps.
+    def test_dirtying_consults_only_the_dependent_cone(self, monkeypatch):
+        from graph import runtime
+
+        # 49 unrelated pricers alongside the one being bumped.
         pricers = [make_pricer()() for _ in range(50)]
         for p in pricers:
             p.pv()
         target = pricers[0]
 
-        counting = _CountingDict(graph.DEFAULT._deps)
-        monkeypatch.setattr(graph.DEFAULT, "_deps", counting)
+        seen = []
+        real = runtime._BiMultiMap.readers_of
+
+        def spy(self, key):
+            seen.append(key)
+            return real(self, key)
+
+        monkeypatch.setattr(runtime._BiMultiMap, "readers_of", spy)
 
         target.spot.set_value(110.0)
 
-        assert counting.scans == 0
+        # One lookup for spot, one for each cell it dirties (payoff, pv), and
+        # none for the other 49 pricers.
+        assert len(seen) == 3
         assert target.payoff.is_dirty() and target.pv.is_dirty()
         assert not pricers[1].pv.is_dirty()
 
