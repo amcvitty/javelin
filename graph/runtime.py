@@ -66,6 +66,7 @@ class Graph:
         self._values = {}  # key -> memoised result
         self._overrides = {}  # key -> value set directly; the body never runs
         self._dirty = set()  # keys whose memoised value is stale
+        self._dependents = {}  # dep key -> set of keys that read it; tracks _deps
         self._layers = []  # stack of open diddle scopes
 
     # -- exploring ---------------------------------------------------------
@@ -103,6 +104,7 @@ class Graph:
         self._values.clear()
         self._overrides.clear()
         self._dirty.clear()
+        self._dependents.clear()
         self._layers.clear()
 
     # -- building and evaluating -------------------------------------------
@@ -134,9 +136,34 @@ class Graph:
 
     def _record(self, key, deps):
         self._touch(key)
-        self._deps[key] = deps
+        self._set_deps(key, deps)
         self._known.add(key)
         self._known.update(deps)
+
+    def _set_deps(self, key, deps):
+        """Point this cell at `deps`, or drop the entry when `deps` is _MISSING.
+
+        The sole writer of `_deps`, so the reverse index in `_dependents` is
+        kept in step here -- one cell's worth of work -- rather than rebuilt
+        from the whole graph every time a value is set.
+        """
+        was = self._deps.get(key, _MISSING)
+        old = () if was is _MISSING else was
+        new = () if deps is _MISSING else deps
+        for dep in old:
+            if dep not in new:
+                readers = self._dependents.get(dep)
+                if readers is not None:
+                    readers.discard(key)
+                    if not readers:
+                        del self._dependents[dep]
+        for dep in new:
+            if dep not in old:
+                self._dependents.setdefault(dep, set()).add(key)
+        if deps is _MISSING:
+            self._deps.pop(key, None)
+        else:
+            self._deps[key] = deps
 
     def _run_inputs(self, key, evaluate_all):
         """Walk a cell's inputs in order, resolving each dependency.
@@ -215,23 +242,13 @@ class Graph:
         self._overrides.pop(key, None)
         self._dirty_from(key)
 
-    def _dependents(self):
-        """`_deps` inverted: which cells read each cell.
-
-        Built on demand rather than maintained, so that setting a value is the
-        only place that pays for it and there is no extra state for a diddle
-        scope to save and restore.
-        """
-        dependents = {}
-        for key, deps in self._deps.items():
-            for dep in deps:
-                dependents.setdefault(dep, set()).add(key)
-        return dependents
-
     def _dirty_from(self, key):
-        """Mark everything that depends on this cell, transitively, as dirty."""
-        dependents = self._dependents()
-        pending = list(dependents.get(key, ()))
+        """Mark everything that depends on this cell, transitively, as dirty.
+
+        Walks only the dependent cone, off the `_dependents` index, so the cost
+        of setting a value is independent of the size of the rest of the graph.
+        """
+        pending = list(self._dependents.get(key, ()))
         while pending:
             dependent = pending.pop()
             if dependent in self._dirty or dependent in self._overrides:
@@ -240,7 +257,7 @@ class Graph:
                 continue
             self._touch(dependent)
             self._dirty.add(dependent)
-            pending.extend(dependents.get(dependent, ()))
+            pending.extend(self._dependents.get(dependent, ()))
 
     # -- diddle scopes -----------------------------------------------------
 
@@ -283,7 +300,7 @@ class Graph:
         """
         for key, (value, deps, was_dirty, override) in saved.items():
             _restore_entry(self._values, key, value)
-            _restore_entry(self._deps, key, deps)
+            self._set_deps(key, deps)  # reverts the reverse index too
             _restore_entry(self._overrides, key, override)
             if was_dirty:
                 self._dirty.add(key)

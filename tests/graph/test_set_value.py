@@ -145,6 +145,56 @@ class TestChangingGraphShape:
         assert graph.deps(c.pick) == {(c, Chooser.which), (c, Chooser.item, 3)}
 
 
+class _CountingDict(dict):
+    """A dict that counts full-table scans through `.items()`."""
+
+    scans = 0
+
+    def items(self):
+        self.scans += 1
+        return super().items()
+
+
+class TestScaling:
+    """Setting a value costs the dependent cone, not the whole graph."""
+
+    def test_setting_a_value_does_not_scan_the_whole_dependency_table(
+        self, monkeypatch
+    ):
+        # A large graph unrelated to the cell being set. Dirtying walks the
+        # maintained reverse index, so it must not pay to iterate all of _deps.
+        pricers = [make_pricer()() for _ in range(50)]
+        for p in pricers:
+            p.pv()
+        target = pricers[0]
+
+        counting = _CountingDict(graph.DEFAULT._deps)
+        monkeypatch.setattr(graph.DEFAULT, "_deps", counting)
+
+        target.spot.set_value(110.0)
+
+        assert counting.scans == 0
+        assert target.payoff.is_dirty() and target.pv.is_dirty()
+        assert not pricers[1].pv.is_dirty()
+
+    def test_the_reverse_index_is_restored_after_a_shape_changing_diddle(self):
+        Chooser = make_chooser()
+        c = Chooser()
+        assert c.pick() == 10  # reads which + item(1)
+
+        with graph.diddle((c.which, 5)):
+            assert c.pick() == 50  # now reads which + item(5)
+
+        # Back to reading item(1): setting item(5) must not dirty pick,
+        # setting item(1) must.
+        c.item.set_value(0.0, args=(5,))
+        assert not c.pick.is_dirty()
+
+        c.item.set_value(99.0, args=(1,))
+        assert c.pick.is_dirty()
+        assert c.pick() == 99.0
+
+
 class TestClearValue:
     def test_the_computed_value_comes_back(self):
         p = make_pricer()()
