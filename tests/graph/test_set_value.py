@@ -145,6 +145,53 @@ class TestChangingGraphShape:
         assert graph.deps(c.pick) == {(c, Chooser.which), (c, Chooser.item, 3)}
 
 
+class TestScaling:
+    """Setting a value costs the dependent cone, not the whole graph."""
+
+    def test_dirtying_consults_only_the_dependent_cone(self, monkeypatch):
+        from graph import runtime
+
+        # 49 unrelated pricers alongside the one being bumped.
+        pricers = [make_pricer()() for _ in range(50)]
+        for p in pricers:
+            p.pv()
+        target = pricers[0]
+
+        seen = []
+        real = runtime._BiMultiMap.readers_of
+
+        def spy(self, key):
+            seen.append(key)
+            return real(self, key)
+
+        monkeypatch.setattr(runtime._BiMultiMap, "readers_of", spy)
+
+        target.spot.set_value(110.0)
+
+        # One lookup for spot, one for each cell it dirties (payoff, pv), and
+        # none for the other 49 pricers.
+        assert len(seen) == 3
+        assert target.payoff.is_dirty() and target.pv.is_dirty()
+        assert not pricers[1].pv.is_dirty()
+
+    def test_the_reverse_index_is_restored_after_a_shape_changing_diddle(self):
+        Chooser = make_chooser()
+        c = Chooser()
+        assert c.pick() == 10  # reads which + item(1)
+
+        with graph.diddle((c.which, 5)):
+            assert c.pick() == 50  # now reads which + item(5)
+
+        # Back to reading item(1): setting item(5) must not dirty pick,
+        # setting item(1) must.
+        c.item.set_value(0.0, args=(5,))
+        assert not c.pick.is_dirty()
+
+        c.item.set_value(99.0, args=(1,))
+        assert c.pick.is_dirty()
+        assert c.pick() == 99.0
+
+
 class TestClearValue:
     def test_the_computed_value_comes_back(self):
         p = make_pricer()()

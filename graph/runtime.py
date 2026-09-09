@@ -53,6 +53,55 @@ def make_key(obj, node, args=(), kwargs=None):
     return (obj, node, *bound.arguments.values())
 
 
+class _BiMultiMap:
+    """A many-to-many relation kept navigable from both ends at once.
+
+    `points_at(key)` is the frozenset `key` maps to; `readers_of(key)` is every
+    key whose set contains it. Only `set` and `discard` write, and each fixes
+    both directions, so the forward and reverse views cannot drift out of step
+    -- which is the whole reason this is one object rather than two dicts.
+    """
+
+    def __init__(self):
+        self._forward = {}  # key -> frozenset it maps to
+        self._reverse = {}  # key -> set of keys that map to it
+
+    def __contains__(self, key):
+        return key in self._forward
+
+    def points_at(self, key):
+        """What `key` maps to, or an empty frozenset."""
+        return self._forward.get(key, frozenset())
+
+    def readers_of(self, key):
+        """The keys that map to `key`. Live -- iterate it, do not mutate it."""
+        return self._reverse.get(key, frozenset())
+
+    def set(self, key, targets):
+        """Point `key` at `targets` (a frozenset), adjusting the reverse view."""
+        old = self._forward.get(key, frozenset())
+        for gone in old - targets:
+            readers = self._reverse[gone]
+            readers.discard(key)
+            if not readers:
+                del self._reverse[gone]
+        for added in targets - old:
+            self._reverse.setdefault(added, set()).add(key)
+        self._forward[key] = targets
+
+    def discard(self, key):
+        """Drop `key`'s forward entry. Keys that map *to* it are left alone."""
+        for gone in self._forward.pop(key, frozenset()):
+            readers = self._reverse[gone]
+            readers.discard(key)
+            if not readers:
+                del self._reverse[gone]
+
+    def clear(self):
+        self._forward.clear()
+        self._reverse.clear()
+
+
 class Graph:
     """A set of cells and their memoised values.
 
@@ -61,7 +110,7 @@ class Graph:
     """
 
     def __init__(self):
-        self._deps = {}  # key -> frozenset of dependency keys, once expanded
+        self._deps = _BiMultiMap()  # cell -> deps, navigable back to readers too
         self._known = set()  # every key referenced, expanded or not
         self._values = {}  # key -> memoised result
         self._overrides = {}  # key -> value set directly; the body never runs
@@ -116,7 +165,7 @@ class Graph:
             # A dirty cell is re-expanded: a changed value can reach an edge's
             # arguments or guard, and so change the shape of the graph.
             self._record(key, self._run_inputs(key, evaluate_all=False)[0])
-        return self._deps[key]
+        return self._deps.points_at(key)
 
     def evaluate(self, key):
         """This cell's value, evaluating its dependencies first."""
@@ -134,7 +183,7 @@ class Graph:
 
     def _record(self, key, deps):
         self._touch(key)
-        self._deps[key] = deps
+        self._deps.set(key, deps)
         self._known.add(key)
         self._known.update(deps)
 
@@ -215,23 +264,13 @@ class Graph:
         self._overrides.pop(key, None)
         self._dirty_from(key)
 
-    def _dependents(self):
-        """`_deps` inverted: which cells read each cell.
-
-        Built on demand rather than maintained, so that setting a value is the
-        only place that pays for it and there is no extra state for a diddle
-        scope to save and restore.
-        """
-        dependents = {}
-        for key, deps in self._deps.items():
-            for dep in deps:
-                dependents.setdefault(dep, set()).add(key)
-        return dependents
-
     def _dirty_from(self, key):
-        """Mark everything that depends on this cell, transitively, as dirty."""
-        dependents = self._dependents()
-        pending = list(dependents.get(key, ()))
+        """Mark everything that depends on this cell, transitively, as dirty.
+
+        Walks only the dependent cone, following `_deps` back from readers to
+        readers, so the cost is independent of the size of the rest of the graph.
+        """
+        pending = list(self._deps.readers_of(key))
         while pending:
             dependent = pending.pop()
             if dependent in self._dirty or dependent in self._overrides:
@@ -240,7 +279,7 @@ class Graph:
                 continue
             self._touch(dependent)
             self._dirty.add(dependent)
-            pending.extend(dependents.get(dependent, ()))
+            pending.extend(self._deps.readers_of(dependent))
 
     # -- diddle scopes -----------------------------------------------------
 
@@ -269,7 +308,7 @@ class Graph:
         if self._layers and key not in self._layers[-1]:
             self._layers[-1][key] = (
                 self._values.get(key, _MISSING),
-                self._deps.get(key, _MISSING),
+                self._deps.points_at(key) if key in self._deps else _MISSING,
                 key in self._dirty,
                 self._overrides.get(key, _MISSING),
             )
@@ -283,7 +322,10 @@ class Graph:
         """
         for key, (value, deps, was_dirty, override) in saved.items():
             _restore_entry(self._values, key, value)
-            _restore_entry(self._deps, key, deps)
+            if deps is _MISSING:
+                self._deps.discard(key)  # drops the reverse edges too
+            else:
+                self._deps.set(key, deps)  # reverts the reverse edges too
             _restore_entry(self._overrides, key, override)
             if was_dirty:
                 self._dirty.add(key)
