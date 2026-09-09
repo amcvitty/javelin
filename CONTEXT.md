@@ -24,7 +24,7 @@ _Avoid_: reference data, static data.
 Instrument — one priceable contract with economic terms but no size or
 direction. An option, a swap, a single leg. Its `pv()` is per unit. Example:
 `/inst/EQ/Option/ACME-C100-21AUG2031`.
-_Avoid_: security, product, position.
+_Avoid_: security, product.
 
 **`/prod`**:
 Structured product — a composition of instrument legs into one payoff, with the
@@ -33,10 +33,12 @@ per-leg weights held on the product, not the instrument. Not yet implemented
 _Avoid_: basket, portfolio, structure.
 
 **`/pos`**:
-Position — a net holding: an instrument or product plus a size and a direction
-(long/short), carried as one **signed** `quantity`. A standing state, not an
-event: no price, timestamp or counterparty. Example: `/pos/EQD/exotics/NOTE-0001`.
-_Avoid_: holding, booking, ticket.
+Position — a net holding: an instrument or product plus a size and a direction,
+carried as one **signed** `quantity`. A standing state, not an event: no price,
+timestamp or counterparty. Its direction is **long or short**, never bought or
+sold — buying and selling are events, and events are `/trade`. Example:
+`/pos/EQD/exotics/NOTE-0001`.
+_Avoid_: booking, ticket.
 
 **`/trade`**:
 Trade — a discrete transaction at a point in time: an instrument, a direction, a

@@ -21,7 +21,7 @@ class Position(McObject):
 
     @node(node.Stored)
     def instrument_path(self):
-        """Namespace path of the instrument this position is in."""
+        """Namespace path of the instrument this position is on."""
         return "/inst/EQ/Option/UNSET"
 
     @node(node.Stored)
