@@ -283,7 +283,7 @@ on the shared market data, and leaving the scope recomputes **nothing**.
 
 The pricer is flat where flatness costs nothing to prove: one `rate`, one
 `vol`. A term structure and a vol surface, a `/prod` composition layer, and the
-`/trade` / `/book` layers of the naming scheme are tracked as follow-ups.
+`/trade` transaction layer are tracked as follow-ups.
 See [CONTEXT.md](CONTEXT.md) and
 [docs/adr/0001-namespace-taxonomy.md](docs/adr/0001-namespace-taxonomy.md) for
 the object naming scheme, and [example_pricer.py](example_pricer.py) for the
@@ -406,21 +406,21 @@ restores the graph shape on exit like any other.
 
 ## Comprehensions
 
-A book is a collection of trades, and its PV is the sum of theirs. That is one
+A book is a collection of positions, and its PV is the sum of theirs. That is one
 call site naming *many* cells — as many as the book has members, which is not
 known until the member list has been evaluated:
 
 ```python
 @node
 def pv(self):
-    return sum(self.ns[path].pv() for path in self.trade_paths())
+    return sum(self.ns[path].pv() for path in self.position_paths())
 ```
 
 The whole comprehension becomes one input — a `MapEdge` — and one `ivs` slot
 holding the results as a list. The rewritten body never loops:
 
 ```
-ivs[0] = self.trade_paths()                             <- CallEdge
+ivs[0] = self.position_paths()                          <- CallEdge
 ivs[1] = (self.ns[path].pv() for path in ivs[0])        <- MapEdge, over ivs[0]
 needed = {0}
 return sum(ivs[1])
@@ -435,7 +435,7 @@ objects, which is why it is the shape `analytics.Book` uses (see
 
 Expansion evaluates the collection, because that is what says how many cells
 there are — but not the elements' values, which it does not need to name them.
-So `graph.deps(book.pv)` runs `trade_paths` and nothing below it.
+So `graph.deps(book.pv)` runs `position_paths` and nothing below it.
 
 **What a comprehension may contain.** One `for` clause, no `if` filter, and an
 element that is exactly one node call. A list comprehension and a generator
@@ -445,11 +445,11 @@ because it is not one list of cells.
 
 | Written | Becomes |
 |---|---|
-| `[t.pv() for t in self.Trades()]` | map, receiver is the element |
+| `[p.pv() for p in self.Positions()]` | map, receiver is the element |
 | `[self.ns[p].pv() for p in self.Paths()]` | map, receiver built from the element |
-| `[t.pv() * 2 for t in self.Trades()]` | raises — the element must be the call |
-| `[t.pv() * t.size() for t in self.Trades()]` | raises — one node call, not two |
-| `[t.pv() for t in self.Trades() if t.live()]` | raises — no filter yet |
+| `[p.pv() * 2 for p in self.Positions()]` | raises — the element must be the call |
+| `[p.pv() * p.size() for p in self.Positions()]` | raises — one node call, not two |
+| `[p.pv() for p in self.Positions() if p.live()]` | raises — no filter yet |
 | `[r * 2 for r in self.Rates()]` | plain code over one edge's value |
 
 The two that raise are asking for a node on the element that combines them —

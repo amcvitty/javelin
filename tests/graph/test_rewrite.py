@@ -474,7 +474,7 @@ class TestUnsupported:
 
                 @node
                 def total(self):
-                    return sum(t.pv() for b in self.books() for t in b.trades)
+                    return sum(p.pv() for b in self.books() for p in b.positions)
 
     def test_a_set_comprehension_of_cells(self):
         with pytest.raises(ValueError, match="silently drop cells"):

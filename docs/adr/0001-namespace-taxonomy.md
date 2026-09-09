@@ -6,13 +6,14 @@ accepted
 
 ## Decision
 
-Persisted `analytics` objects are named by a path under one of five fixed
+Persisted `analytics` objects are named by a path under one of six fixed
 prefixes — `/mkt` (market data), `/inst` (instruments), `/prod` (structured
-products), `/trade` (trades), `/book` (books) — with the path below the prefix
-ordered asset-class-first (`/mkt/EQ/ACME/Market`, `/inst/EQ/Option/...`,
-`/trade/EQD/2026/...`). `/mkt`, `/inst`, `/trade` and `/book` are implemented;
-`/prod` is specified here but built later (a GEN-16 child). How `/book` and
-`/trade` are shaped is `docs/adr/0002`.
+products), `/pos` (positions), `/trade` (transactions), `/book` (books) — with
+the path below the prefix ordered asset-class-first (`/mkt/EQ/ACME/Market`,
+`/inst/EQ/Option/...`, `/pos/EQD/exotics/...`). `/mkt`, `/inst`, `/pos` and
+`/book` are implemented; `/prod` is specified here but built later (a GEN-16
+child), and `/trade` is reserved for the transaction layer (GEN-33). How
+`/book` and `/pos` are shaped is `docs/adr/0002`.
 
 ## Why
 
@@ -22,11 +23,16 @@ convention: changing a prefix or a nesting level later means migrating stored
 rows and is not a refactor. It is worth fixing the shape once, up front, even
 for the layers we have not built.
 
-Five prefixes rather than one flat namespace because the layers have genuinely
+Six prefixes rather than one flat namespace because the layers have genuinely
 different lifecycles and ownership — market data is calibrated and shared,
-instruments are contract terms, trades add size and desk ownership, books are
-organisational. A reader seeing `/trade/...` in a cell key should know what kind
+instruments are contract terms, positions add size and desk ownership, books are
+organisational. A reader seeing `/pos/...` in a cell key should know what kind
 of object it is without loading it.
+
+Positions and transactions are separate prefixes because they are separate
+kinds of thing: a position is a standing net holding, a trade is a dated event.
+Naming a holding `/trade` was the original mistake this taxonomy inherited, and
+it closed off the word for the layer that should own it (GEN-31, GEN-33).
 
 ## Considered and rejected
 

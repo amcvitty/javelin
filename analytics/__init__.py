@@ -6,13 +6,13 @@ dependencies are static, setting spot dirties only what is downstream of it, and
 a greek is a ``diddle`` away.
 
 Layering is one way, ``analytics -> ns -> graph``; nothing lower imports this
-package. The object naming scheme (``/mkt``, ``/inst``, ``/trade``, ``/book``,
+package. The object naming scheme (``/mkt``, ``/inst``, ``/pos``, ``/book``,
 and the later ``/prod``) is in ``CONTEXT.md`` and
 ``docs/adr/0001-namespace-taxonomy.md``.
 """
 
 from . import blackscholes
-from .book import Book, Trade
+from .book import Book, Position
 from .instrument import EuropeanOption
 from .market import DiscountCurve, Market, PricingEnv
 
@@ -21,7 +21,7 @@ __all__ = [
     "DiscountCurve",
     "EuropeanOption",
     "Market",
+    "Position",
     "PricingEnv",
-    "Trade",
     "blackscholes",
 ]

@@ -9,7 +9,7 @@ persisted objects.
 
 ## Language — namespace taxonomy
 
-Every persisted object has a name that is a path under one of five prefixes.
+Every persisted object has a name that is a path under one of six prefixes.
 The prefix says what kind of thing it is; the rest of the path is
 asset-class-first (`EQ`, `IR`, `EQD`, ...), then narrower. Names are store keys,
 so the scheme is effectively an interface — see `docs/adr/0001`.
@@ -24,7 +24,7 @@ _Avoid_: reference data, static data.
 Instrument — one priceable contract with economic terms but no size or
 direction. An option, a swap, a single leg. Its `pv()` is per unit. Example:
 `/inst/EQ/Option/ACME-C100-21AUG2031`.
-_Avoid_: security, product, position.
+_Avoid_: security, product.
 
 **`/prod`**:
 Structured product — a composition of instrument legs into one payoff, with the
@@ -32,13 +32,23 @@ per-leg weights held on the product, not the instrument. Not yet implemented
 (see `docs/adr/0001` and GEN-16 children). Example: `/prod/EQ/CPN/ACME-70PCT-2031`.
 _Avoid_: basket, portfolio, structure.
 
+**`/pos`**:
+Position — a net holding: an instrument or product plus a size and a direction,
+carried as one **signed** `quantity`. A standing state, not an event: no price,
+timestamp or counterparty. Its direction is **long or short**, never bought or
+sold — buying and selling are events, and events are `/trade`. Example:
+`/pos/EQD/exotics/NOTE-0001`.
+_Avoid_: booking, ticket.
+
 **`/trade`**:
-Trade — an instrument or product plus a size and a direction (bought/sold),
-carried as one **signed** `quantity`. Example: `/trade/EQD/2026/NOTE-0001`.
-_Avoid_: position, booking, ticket.
+Trade — a discrete transaction at a point in time: an instrument, a direction, a
+price, a timestamp, a counterparty. A historical fact, as opposed to the net
+holding it contributes to. Not yet implemented (see GEN-33). Example:
+`/trade/EQD/2026/FILL-0001`.
+_Avoid_: fill, execution.
 
 **`/book`**:
-Book — a named collection of trade paths, held as stored state so that
+Book — a named collection of position paths, held as stored state so that
 membership is a graph input. Example: `/book/EQD/exotics/london`. See
 `docs/adr/0002-book-representation.md`.
 _Avoid_: portfolio, folder, blotter.

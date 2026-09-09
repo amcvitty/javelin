@@ -117,7 +117,7 @@ class CallEdge(Edge):
 
 @dataclass(frozen=True)
 class MapEdge(Edge):
-    """One call site, one cell per element: `[t.pv() for t in self.Trades()]`.
+    """One call site, one cell per element: `[p.pv() for p in self.Positions()]`.
 
     `over` produces the collection, as a pure function of (self, node, ivs);
     `receiver` and `args` take the element as a fourth argument, so the loop
