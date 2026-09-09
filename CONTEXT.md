@@ -33,13 +33,14 @@ per-leg weights held on the product, not the instrument. Not yet implemented
 _Avoid_: basket, portfolio, structure.
 
 **`/trade`**:
-Trade — an instrument or product plus a size and a direction (bought/sold).
-Not yet implemented. Example: `/trade/EQD/2026/NOTE-0001`.
+Trade — an instrument or product plus a size and a direction (bought/sold),
+carried as one **signed** `quantity`. Example: `/trade/EQD/2026/NOTE-0001`.
 _Avoid_: position, booking, ticket.
 
 **`/book`**:
-Book — a named collection of trade paths. Not yet implemented. Example:
-`/book/EQD/exotics/london`.
+Book — a named collection of trade paths, held as stored state so that
+membership is a graph input. Example: `/book/EQD/exotics/london`. See
+`docs/adr/0002-book-representation.md`.
 _Avoid_: portfolio, folder, blotter.
 
 ## Language — pricing
