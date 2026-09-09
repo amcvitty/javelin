@@ -78,7 +78,9 @@ the bodies in the order `1, 0, 2, 3, 4, 5`.
 | **key** | How a cell is identified: the flat tuple `(object, method, *args)`. |
 | **terminal** | A constant. The node's own arguments; the key is implicitly the value. |
 | **`Value`** | An input that is one of the cell's arguments — a terminal. |
-| **`Edge`** | An input that is another cell. Carries `receiver`, `args` and `guard` as compiled `(self, node, ivs)` lambdas. |
+| **`Edge`** | An input reached by calling a method on objects the graph produced. Abstract: it says how many cells one call site names. |
+| **`CallEdge`** | An `Edge` naming one cell. Carries `receiver` and `args` as compiled `(self, node, ivs)` lambdas. |
+| **`MapEdge`** | An `Edge` naming one cell *per element* of a collection — a comprehension (see "Comprehensions"). |
 | **`Local`** | An input that is a body intermediate hoisted above the body. A `(self, node, ivs)` lambda, no dependency of its own (see "Intermediate locals"). |
 | **guard** | The condition under which a call site is reached. `None` means unconditional. |
 | **`ivs`** | The input-value array a compiled body reads instead of parameters and node calls. |
@@ -291,7 +293,7 @@ whole thing running.
 
 ```
 graph/
-  ir.py         Value, Edge, Local, CompiledNode -- the compiled form
+  ir.py         Value, Edge (CallEdge, MapEdge), Local, Call, CompiledNode
   rewriter.py   Guard, GuardStack, RawEdge, RawLocal, Rewriter -- the AST transform
   compiler.py   compile_node(): source -> CompiledNode
   runtime.py    make_key(), Graph, DEFAULT -- cells, deps, values, diddles
@@ -402,6 +404,64 @@ widened transitively through hoisted locals, so a local an edge's shape depends
 on is still evaluated during expansion, and a diddle that changes such a local
 restores the graph shape on exit like any other.
 
+## Comprehensions
+
+A book is a collection of trades, and its PV is the sum of theirs. That is one
+call site naming *many* cells — as many as the book has members, which is not
+known until the member list has been evaluated:
+
+```python
+@node
+def pv(self):
+    return sum(self.ns[path].pv() for path in self.trade_paths())
+```
+
+The whole comprehension becomes one input — a `MapEdge` — and one `ivs` slot
+holding the results as a list. The rewritten body never loops:
+
+```
+ivs[0] = self.trade_paths()                             <- CallEdge
+ivs[1] = (self.ns[path].pv() for path in ivs[0])        <- MapEdge, over ivs[0]
+needed = {0}
+return sum(ivs[1])
+```
+
+`MapEdge.over` produces the collection; `receiver` and `args` take the element
+as a fourth parameter, named after the comprehension's own loop variable, so the
+loop variable needs no rewriting — `self.ns[path]` compiles to a lambda of
+`(self, node, ivs, path)`. That is what lets a book hold *names* rather than
+objects, which is why it is the shape `analytics.Book` uses (see
+`docs/adr/0002-book-representation.md`).
+
+Expansion evaluates the collection, because that is what says how many cells
+there are — but not the elements' values, which it does not need to name them.
+So `graph.deps(book.pv)` runs `trade_paths` and nothing below it.
+
+**What a comprehension may contain.** One `for` clause, no `if` filter, and an
+element that is exactly one node call. A list comprehension and a generator
+expression compile identically; a set comprehension is rejected because it would
+silently drop cells whose values happen to be equal, and a dict comprehension
+because it is not one list of cells.
+
+| Written | Becomes |
+|---|---|
+| `[t.pv() for t in self.Trades()]` | map, receiver is the element |
+| `[self.ns[p].pv() for p in self.Paths()]` | map, receiver built from the element |
+| `[t.pv() * 2 for t in self.Trades()]` | raises — the element must be the call |
+| `[t.pv() * t.size() for t in self.Trades()]` | raises — one node call, not two |
+| `[t.pv() for t in self.Trades() if t.live()]` | raises — no filter yet |
+| `[r * 2 for r in self.Rates()]` | plain code over one edge's value |
+
+The two that raise are asking for a node on the element that combines them —
+`t.weighted_pv()` — which is better modelling anyway. A loop-invariant call can
+be hoisted into an assignment above the comprehension instead.
+
+Every element must resolve the same way. A collection whose members' targets are
+all nodes gives one dependency each; one where none are gives plain calls and no
+dependencies; a *mixed* one raises `TypeError` when it resolves, because
+contributing dependencies for some members and silently not for others is
+exactly the half-connected graph this layer exists to prevent.
+
 ## Deliberately unsupported
 
 These raise `ValueError` when the class is created, rather than building a wrong
@@ -410,7 +470,8 @@ inputs?" first.
 
 | Pattern | Why |
 |---|---|
-| Node call in a loop or comprehension | Not one call site, so not one input. |
+| Node call in a loop or lambda | Not one call site, so not one input. A comprehension *is* supported — see above. |
+| A comprehension with a filter, two `for` clauses, or more than one node call | One input names one collection of cells; see the table above for what to write instead. |
 | `self.x` member variables, except `self.ns` | A node may only see functions and constants. |
 | `self` used as a value | Would smuggle member access out to a helper. |
 | Node call argument using a non-hoistable local | Inputs are hoisted; a local that is rebound, conditional, or reads another such local cannot come with them (see above). |
@@ -419,8 +480,8 @@ inputs?" first.
 | `async def`, `*args`/`**kwargs` at a call site | Not modelled. |
 
 Also not supported: unhashable arguments, and a node reached through anything
-that does not read `self` — `other.a()`, where `other` is a local or a global,
-stays inline as plain code.
+that does not read `self` and is not a comprehension's element — `other.a()`,
+where `other` is a local or a global, stays inline as plain code.
 
 Because compilation reads the method's own source, a node must be defined
 somewhere `inspect.getsourcelines` can find it. Classes defined in a REPL or

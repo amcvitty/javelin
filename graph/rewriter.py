@@ -5,12 +5,18 @@ and each one yields an input saying how it is produced. A node call also
 records the *guard* under which its call site is reached, so an input that a
 particular invocation never touches is never made a dependency -- which is
 what stops a recursive node expanding forever.
+
+A comprehension whose element is a node call is rewritten the same way: the
+whole comprehension becomes one `ivs[i]` holding the list of results, and the
+input it yields is a `MapEdge` naming one cell per element.
 """
 
 import ast
 import contextlib
 import copy
 from dataclasses import dataclass
+
+from .ir import CallEdge, MapEdge
 
 # The only member variable a node may read. An object's namespace is fixed when
 # it is created, so reading it cannot smuggle mutable state past the graph.
@@ -27,10 +33,30 @@ def terminates(stmts):
     return bool(stmts) and isinstance(stmts[-1], (ast.Return, ast.Raise))
 
 
-def impl_args(self_name):
-    """The (self, node, ivs) parameter list every compiled callable takes."""
-    return ast.arguments(
-        args=[ast.arg(arg=self_name), ast.arg(arg="node"), ast.arg(arg="ivs")]
+def impl_args(self_name, element=None):
+    """The (self, node, ivs) parameter list every compiled callable takes.
+
+    A `MapEdge`'s receiver and arguments take the element as a fourth parameter,
+    named after the comprehension's own loop variable -- which is why the loop
+    variable needs no rewriting inside them.
+    """
+    names = [self_name, "node", "ivs"]
+    if element is not None:
+        names.append(element)
+    return ast.arguments(args=[ast.arg(arg=name) for name in names])
+
+
+def call_args(args, keywords):
+    """An expression building one call's (positional, keyword) arguments."""
+    return ast.Tuple(
+        elts=[
+            ast.Tuple(elts=args, ctx=ast.Load()),
+            ast.Dict(
+                keys=[ast.Constant(value=k.arg) for k in keywords],
+                values=[k.value for k in keywords],
+            ),
+        ],
+        ctx=ast.Load(),
     )
 
 
@@ -135,15 +161,96 @@ class GuardStack:
 
 @dataclass
 class RawEdge:
-    """A node call site found in the body, before it is compiled."""
+    """A node call site found in the body, before it is compiled.
+
+    Each kind knows both the expressions it needs compiling (`parts`) and how to
+    put the results back together (`build`), so that the compiler never has to
+    know how many lambdas an edge kind takes.
+    """
 
     index: int
     target: str
+    guard: ast.expr | None
+    source: str
+
+    def _lambda(self, self_name, body, element=None):
+        return ast.Lambda(args=impl_args(self_name, element), body=body)
+
+    def _guard_part(self, self_name):
+        if self.guard is None:
+            return ast.Constant(value=None)
+        return self._lambda(self_name, self.guard)
+
+    def parts(self, self_name) -> list[ast.expr]:
+        """The expressions to compile, in the order `build` expects them."""
+        raise NotImplementedError
+
+    def build(self, compiled) -> object:
+        """The `Edge` for this call site, from its compiled parts."""
+        raise NotImplementedError
+
+
+@dataclass
+class RawCallEdge(RawEdge):
+    """One call site naming one cell."""
+
     receiver: ast.expr
     args: list
     keywords: list
-    guard: ast.expr | None
-    source: str
+
+    def parts(self, self_name):
+        return [
+            self._lambda(self_name, self.receiver),
+            self._lambda(self_name, call_args(self.args, self.keywords)),
+            self._guard_part(self_name),
+        ]
+
+    def build(self, compiled):
+        receiver, args, guard = compiled
+        return CallEdge(
+            index=self.index,
+            target=self.target,
+            guard=guard,
+            source=self.source,
+            receiver=receiver,
+            args=args,
+        )
+
+
+@dataclass
+class RawMapEdge(RawEdge):
+    """One call site naming one cell per element of a collection.
+
+    `receiver` and `args` are compiled with the loop variable as an extra
+    parameter, so they may refer to it by name.
+    """
+
+    over: ast.expr
+    receiver: ast.expr
+    args: list
+    keywords: list
+    var: str
+
+    def parts(self, self_name):
+        return [
+            self._lambda(self_name, self.over),
+            self._lambda(self_name, self.receiver, self.var),
+            self._lambda(self_name, call_args(self.args, self.keywords), self.var),
+            self._guard_part(self_name),
+        ]
+
+    def build(self, compiled):
+        over, receiver, args, guard = compiled
+        return MapEdge(
+            index=self.index,
+            target=self.target,
+            guard=guard,
+            source=self.source,
+            over=over,
+            receiver=receiver,
+            args=args,
+            var=self.var,
+        )
 
 
 @dataclass
@@ -164,6 +271,9 @@ class Rewriter(ast.NodeTransformer):
     """Replace parameters and node calls with ivs[i], collecting an input
     input for each, together with the guard under which it is reached."""
 
+    #: Constructs whose body runs an unknown number of times, so a node call
+    #: inside one is not a single call site. Comprehensions are absent: each has
+    #: its own visitor, which manages `repeat` itself when it cannot map them.
     _REPEATED = (
         ast.For,
         ast.AsyncFor,
@@ -171,10 +281,6 @@ class Rewriter(ast.NodeTransformer):
         ast.Lambda,
         ast.FunctionDef,
         ast.AsyncFunctionDef,
-        ast.ListComp,
-        ast.SetComp,
-        ast.DictComp,
-        ast.GeneratorExp,
     )
 
     def __init__(self, func, owner, self_name, params, func_def, is_node):
@@ -222,12 +328,13 @@ class Rewriter(ast.NodeTransformer):
             and func_expr.value.id == self.self_name
         )
 
-    def _reads_self(self, expr):
-        return any(
-            isinstance(n, ast.Name) and n.id == self.self_name for n in ast.walk(expr)
-        )
+    def _reads_name(self, expr, name):
+        return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(expr))
 
-    def _call_kind(self, func_expr: ast.Attribute):
+    def _reads_self(self, expr):
+        return self._reads_name(expr, self.self_name)
+
+    def _call_kind(self, func_expr: ast.Attribute, elements=()):
         """What a call site is, from the shape of the attribute being called.
 
         "input"  -- an input: self.<node>(...), or a call on an object the
@@ -236,18 +343,33 @@ class Rewriter(ast.NodeTransformer):
                     been evaluated, so the runtime decides.
         "plain"  -- self.<method>(...) where the method is not a node.
         None     -- nothing to do with the graph.
+
+        `elements` are the loop variables in force, if we are looking inside a
+        comprehension: a call on an element is an input for the same reason a
+        call on another cell's value is.
         """
         if self._is_self_receiver(func_expr):
             attr = getattr(self.owner, func_expr.attr, None)
             return "input" if self.is_node(attr) else "plain"
-        return "input" if self._reads_self(func_expr.value) else None
+        if self._reads_self(func_expr.value):
+            return "input"
+        if any(self._reads_name(func_expr.value, name) for name in elements):
+            return "input"
+        return None
 
-    def _check_hoistable(self, expr, source):
+    def _check_hoistable(self, expr, source, allow=()):
+        """Whether an expression may be lifted above the body.
+
+        `allow` names locals it may read anyway -- a map's loop variable, which
+        is a parameter of the lambdas it is compiled into rather than a local
+        the body binds.
+        """
         for n in ast.walk(expr):
             if (
                 isinstance(n, ast.Name)
                 and n.id in self.locals
                 and n.id not in self.hoisted
+                and n.id not in allow
             ):
                 raise ValueError(
                     f"input {source!r} refers to local {n.id!r}; an input may "
@@ -335,17 +457,185 @@ class Rewriter(ast.NodeTransformer):
 
         index = self._alloc()
         self.edges.append(
-            RawEdge(
+            RawCallEdge(
                 index=index,
                 target=func.attr,
+                guard=None if guard is None else guard.rewritten,
+                source=source,
                 receiver=receiver,
                 args=node.args,
                 keywords=node.keywords,
-                guard=None if guard is None else guard.rewritten,
-                source=source,
             )
         )
         return ast.copy_location(self._ivs(index), node)
+
+    # -- comprehensions ----------------------------------------------------
+
+    def visit_ListComp(self, node):
+        return self._visit_comprehension(node)
+
+    def visit_GeneratorExp(self, node):
+        return self._visit_comprehension(node)
+
+    def visit_SetComp(self, node):
+        return self._rejected_comprehension(
+            node,
+            "a set comprehension would silently drop cells with equal values; "
+            "use a list comprehension",
+        )
+
+    def visit_DictComp(self, node):
+        return self._rejected_comprehension(
+            node, "a dict comprehension cannot be one input; use a list comprehension"
+        )
+
+    def _node_calls(self, node, elements=()):
+        """Node call sites anywhere inside an expression."""
+        return [
+            n
+            for n in ast.walk(node)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and self._call_kind(n.func, elements) == "input"
+        ]
+
+    def _rejected_comprehension(self, node, reason):
+        """A comprehension shape we will not map.
+
+        Only an error if the *repeated* part of it reaches the graph: the
+        outermost iterable runs once however many elements there are, so a node
+        call there is an ordinary edge whatever the rest of the shape is.
+        """
+        source = ast.unparse(node)
+        node.generators[0].iter = self.visit(node.generators[0].iter)
+        self.repeat += 1
+        try:
+            if self._node_calls(node, self._loop_vars(node)):
+                raise ValueError(f"{source}: {reason}")
+            return super().generic_visit(node)
+        finally:
+            self.repeat -= 1
+
+    @staticmethod
+    def _loop_vars(node):
+        """Every name the comprehension's `for` clauses bind.
+
+        A call on any of them is a call on an element, however many levels of
+        `for` there are -- which is what makes a shape we will not map an error
+        rather than the plain code it would otherwise compile to.
+        """
+        return tuple(
+            generator.target.id
+            for generator in node.generators
+            if isinstance(generator.target, ast.Name)
+        )
+
+    def _visit_comprehension(self, node):
+        """Rewrite `[t.pv() for t in <iterable>]` into one `MapEdge`.
+
+        The iterable is visited first and outside the repeat guard: it runs once
+        however many elements there are, so a node call in it is an ordinary
+        edge, and it has to be an *earlier* input than the map that reads it.
+        """
+        if len(node.generators) != 1:
+            return self._rejected_comprehension(
+                node, "only one 'for' clause is supported; give each level its own node"
+            )
+        generator = node.generators[0]
+        if generator.is_async:
+            return self._rejected_comprehension(node, "async is not modelled")
+        if generator.ifs:
+            return self._rejected_comprehension(
+                node,
+                "an 'if' filter is not supported: it would change how many "
+                "cells the comprehension names",
+            )
+        if not isinstance(generator.target, ast.Name):
+            return self._rejected_comprehension(
+                node, "the loop variable must be a single name"
+            )
+
+        source = ast.unparse(node)
+        var = generator.target.id
+        generator.iter = self.visit(generator.iter)
+        calls = self._node_calls(node.elt, (var,))
+        if not calls:
+            # Nothing in the element touches the graph, so it stays plain code
+            # over whatever the iterable produced.
+            return self._plain_element(node)
+        if len(calls) > 1:
+            raise ValueError(
+                f"{source}: a comprehension may contain one node call, not "
+                f"{len(calls)}; give {var!r} a node that combines them, or "
+                "hoist a loop-invariant call into an assignment above"
+            )
+        return self._map_edge(node, calls[0], generator, var, source)
+
+    def _map_edge(self, node, call, generator, var, source):
+        if self.repeat:
+            raise ValueError(
+                f"{source} is inside a loop, comprehension or lambda, so it "
+                "cannot be a single input"
+            )
+        if call is not node.elt:
+            raise ValueError(
+                f"{source}: the element must be the node call itself, not an "
+                f"expression around it; put the rest on a node of {var!r}"
+            )
+        if var in (self.self_name, "node", "ivs"):
+            raise ValueError(
+                f"{source}: {var!r} is not available as a comprehension variable"
+            )
+        func = call.func
+        assert isinstance(func, ast.Attribute)
+        if any(isinstance(a, ast.Starred) for a in call.args) or any(
+            k.arg is None for k in call.keywords
+        ):
+            raise ValueError(f"{source}: *args and **kwargs are not supported")
+
+        self._check_hoistable(generator.iter, source)
+        # The receiver and the arguments may mention the element -- they are
+        # compiled with it as a parameter. They may not contain a node call of
+        # their own, but nothing needs checking here: such a call would have
+        # been a second candidate above, and one is the limit.
+        receiver = (
+            ast.Name(id=self.self_name, ctx=ast.Load())
+            if self._is_self_receiver(func)
+            else self.visit(func.value)
+        )
+        call = self._visit_arguments(call)
+        for expr in [receiver, *call.args, *(k.value for k in call.keywords)]:
+            self._check_hoistable(expr, source, allow=(var,))
+
+        guard = self.guards.current()
+        if guard is not None:
+            self._check_hoistable(guard.rewritten, source)
+            source = f"{source} if {ast.unparse(guard.original)}"
+
+        index = self._alloc()
+        self.edges.append(
+            RawMapEdge(
+                index=index,
+                target=func.attr,
+                guard=None if guard is None else guard.rewritten,
+                source=source,
+                over=generator.iter,
+                receiver=receiver,
+                args=call.args,
+                keywords=call.keywords,
+                var=var,
+            )
+        )
+        return ast.copy_location(self._ivs(index), node)
+
+    def _plain_element(self, node):
+        """The iterable is already visited; the element stays plain code."""
+        self.repeat += 1
+        try:
+            node.elt = self.visit(node.elt)
+        finally:
+            self.repeat -= 1
+        return node
 
     def visit_body(self, stmts):
         """Visit the function's own body, where assignments may be hoisted."""

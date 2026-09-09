@@ -211,9 +211,9 @@ class TestHoistedLocals:
         calc = Calc()
         kinds = [(type(i).__name__, str(i)) for i in graph.inputs(Calc.disc)]
         assert kinds == [
-            ("Edge", "self.expiry()"),
+            ("CallEdge", "self.expiry()"),
             ("Local", "tenor = self.expiry() / 2.0"),
-            ("Edge", "self.rate(tenor)"),
+            ("CallEdge", "self.rate(tenor)"),
         ]
         # The assignment is gone from the body; it reads its ivs slot instead.
         assert graph.code(Calc.disc) == "def disc(self, node, ivs):\n    return ivs[2]"
@@ -425,6 +425,100 @@ class TestUnsupported:
                         return 0.0
                     t = self.base() + 1.0
                     return self.use(t)
+
+    def test_two_node_calls_in_one_comprehension(self):
+        # One comprehension is one input, so it names one cell per element --
+        # not two. The fix is a node on the element that combines them.
+        with pytest.raises(ValueError, match="one node call, not 2"):
+
+            class Calc:
+                @node
+                def members(self):
+                    return []
+
+                @node
+                def total(self):
+                    return sum(m.price() * m.size() for m in self.members())
+
+    def test_an_expression_around_the_comprehension_element(self):
+        with pytest.raises(ValueError, match="must be the node call itself"):
+
+            class Calc:
+                @node
+                def members(self):
+                    return []
+
+                @node
+                def total(self):
+                    return sum(m.price() * 2 for m in self.members())
+
+    def test_a_comprehension_with_an_if_filter(self):
+        with pytest.raises(ValueError, match="'if' filter"):
+
+            class Calc:
+                @node
+                def members(self):
+                    return []
+
+                @node
+                def total(self):
+                    return sum(m.price() for m in self.members() if m.live)
+
+    def test_a_comprehension_with_two_for_clauses(self):
+        with pytest.raises(ValueError, match="one 'for' clause"):
+
+            class Calc:
+                @node
+                def books(self):
+                    return []
+
+                @node
+                def total(self):
+                    return sum(t.pv() for b in self.books() for t in b.trades)
+
+    def test_a_set_comprehension_of_cells(self):
+        with pytest.raises(ValueError, match="silently drop cells"):
+
+            class Calc:
+                @node
+                def members(self):
+                    return []
+
+                @node
+                def prices(self):
+                    return {m.price() for m in self.members()}
+
+    def test_a_comprehension_whose_receiver_is_itself_a_node_call(self):
+        # `self.leg(m)` would be a different cell per element, so it is a
+        # second node call in the element, not part of one input.
+        with pytest.raises(ValueError, match="one node call, not 2"):
+
+            class Calc:
+                @node
+                def members(self):
+                    return []
+
+                @node
+                def leg(self, m):
+                    return m
+
+                @node
+                def total(self):
+                    return sum(self.leg(m).price() for m in self.members())
+
+    def test_a_comprehension_over_plain_data_is_still_ordinary_code(self):
+        # None of the above applies when nothing in the comprehension reaches
+        # the graph -- that has always been, and stays, plain Python.
+        class Calc:
+            @node
+            def rates(self):
+                return [1.0, 2.0]
+
+            @node
+            def total(self):
+                return sum({r * 2 for r in self.rates()} | {x for x in (8, 16)})
+
+        assert Calc().total() == 30.0
 
     def test_rebinding_a_parameter(self):
         with pytest.raises(ValueError, match="rebound"):

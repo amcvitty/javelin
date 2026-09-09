@@ -18,6 +18,30 @@ from .ir import Local, Value
 _MISSING = object()
 
 
+def _targets(edge, calls):
+    """Pair each resolved call with the node it names, or None for a plain call.
+
+    Looked up on the receiver's own type, so a subclass may override a node.
+
+    An edge naming many cells has to name them all the same way: a collection
+    that is part cells and part plain values would contribute dependencies for
+    some of its members and silently not for others, which is the kind of
+    half-connected graph this whole layer exists to prevent.
+    """
+    resolved = [
+        (call, getattr(type(call.receiver), call.target, None)) for call in calls
+    ]
+    found = [target if hasattr(target, "compiled") else None for _, target in resolved]
+    if edge.collects and any(t is not None for t in found) and not all(found):
+        odd = next(call for (call, _), target in zip(resolved, found) if target is None)
+        raise TypeError(
+            f"{edge.source}: {type(odd.receiver).__name__}.{odd.target} is not "
+            "a node, but other elements' are; every element of a comprehension "
+            "must resolve the same way"
+        )
+    return [(call, target) for (call, _), target in zip(resolved, found)]
+
+
 def make_key(obj, node, args=(), kwargs=None):
     """The (object, method, *args) key for a cell.
 
@@ -135,26 +159,35 @@ class Graph:
                 if evaluate_all or inp.index in compiled.needed:
                     ivs[inp.index] = inp.expr(obj, key, ivs)
                 continue
-            if inp.guard is not None and not inp.guard(obj, key, ivs):
+            # An edge names zero or more cells: one call site for a plain call,
+            # one per element for a map. Resolving is always done -- that is
+            # what expansion is -- but the values behind it only when wanted.
+            calls = inp.resolve(obj, key, ivs)
+            wanted = evaluate_all or inp.index in compiled.needed
+            values = []
+            for call, target in _targets(inp, calls):
+                if target is None:
+                    # Not a node on this object after all: an ordinary call,
+                    # which is a value rather than a cell.
+                    if wanted:
+                        values.append(
+                            getattr(call.receiver, call.target)(
+                                *call.positional, **call.keywords
+                            )
+                        )
+                    continue
+                dep = make_key(call.receiver, target, call.positional, call.keywords)
+                deps.append(dep)
+                if wanted:
+                    values.append(self.evaluate(dep))
+            if not wanted:
                 continue
-            # The object called is usually self, but an edge may reach across
-            # the graph to one another input produced. Looked up on that
-            # object's own type, so a subclass may override a node.
-            receiver = inp.receiver(obj, key, ivs)
-            target = getattr(type(receiver), inp.target, None)
-            positional, keywords = inp.args(obj, key, ivs)
-            if not hasattr(target, "compiled"):
-                # Not a node on this object after all: an ordinary call, which
-                # is a value rather than a cell.
-                if evaluate_all or inp.index in compiled.needed:
-                    ivs[inp.index] = getattr(receiver, inp.target)(
-                        *positional, **keywords
-                    )
-                continue
-            dep = make_key(receiver, target, positional, keywords)
-            deps.append(dep)
-            if evaluate_all or inp.index in compiled.needed:
-                ivs[inp.index] = self.evaluate(dep)
+            if inp.collects:
+                ivs[inp.index] = values
+            elif values:
+                # A guarded-off call site names nothing and leaves its slot
+                # alone; the body cannot reach it either.
+                ivs[inp.index] = values[0]
         return frozenset(deps), ivs
 
     # -- setting values ----------------------------------------------------

@@ -10,8 +10,9 @@ Persisted `analytics` objects are named by a path under one of five fixed
 prefixes — `/mkt` (market data), `/inst` (instruments), `/prod` (structured
 products), `/trade` (trades), `/book` (books) — with the path below the prefix
 ordered asset-class-first (`/mkt/EQ/ACME/Market`, `/inst/EQ/Option/...`,
-`/trade/EQD/2026/...`). Only `/mkt` and `/inst` are implemented now; `/prod`,
-`/trade` and `/book` are specified here but built later (GEN-16 children).
+`/trade/EQD/2026/...`). `/mkt`, `/inst`, `/trade` and `/book` are implemented;
+`/prod` is specified here but built later (a GEN-16 child). How `/book` and
+`/trade` are shaped is `docs/adr/0002`.
 
 ## Why
 

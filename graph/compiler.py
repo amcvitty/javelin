@@ -44,46 +44,31 @@ def _split_signature(func):
     return parameters[0].name, params, signature.replace(parameters=parameters[1:])
 
 
-def _edge_args(edge):
-    """An expression building one edge's (positional, keyword) arguments."""
-    return ast.Tuple(
-        elts=[
-            ast.Tuple(elts=edge.args, ctx=ast.Load()),
-            ast.Dict(
-                keys=[ast.Constant(value=k.arg) for k in edge.keywords],
-                values=[k.value for k in edge.keywords],
-            ),
-        ],
-        ctx=ast.Load(),
-    )
-
-
 def _build_factory(func_def, edges, raw_locals, self_name, freevars):
     """Wrap the rewritten body, per-edge lambdas and per-local lambdas in a
     `__make` factory.
 
-    Returns the module and the set of inputs whose *values* some edge reads to
-    work out which cell it refers to -- widened to the transitive closure
-    through any hoisted local an edge reaches.
+    Returns the module, the number of parts each edge contributed, and the set
+    of inputs whose *values* some edge reads to work out which cell it refers
+    to -- widened to the transitive closure through any hoisted local an edge
+    reaches.
     """
     parts: list[ast.expr] = [ast.Name(id=func_def.name, ctx=ast.Load())]
+    counts = []
     needed = set()
     for edge in edges:
-        args = _edge_args(edge)
-        parts.append(ast.Lambda(args=impl_args(self_name), body=edge.receiver))
-        parts.append(ast.Lambda(args=impl_args(self_name), body=args))
-        parts.append(
-            ast.Constant(value=None)
-            if edge.guard is None
-            else ast.Lambda(args=impl_args(self_name), body=edge.guard)
-        )
+        # Each edge kind says which expressions it needs compiling: a receiver
+        # and arguments for one cell, plus a collection for one cell per
+        # element. The compiler stays out of the difference.
+        edge_parts = edge.parts(self_name)
+        counts.append(len(edge_parts))
+        parts.extend(edge_parts)
         # An input whose value is read to work out which cell this edge means
-        # -- through the object it is called on, or through its arguments --
-        # has to be evaluated during expansion, not just during evaluation.
-        needed |= ivs_indices(edge.receiver)
-        needed |= ivs_indices(args)
-        if edge.guard is not None:
-            needed |= ivs_indices(edge.guard)
+        # -- through the object it is called on, its arguments, or the
+        # collection it maps over -- has to be evaluated during expansion, not
+        # just during evaluation.
+        for part in edge_parts:
+            needed |= ivs_indices(part)
     for local in raw_locals:
         parts.append(ast.Lambda(args=impl_args(self_name), body=local.value))
 
@@ -106,7 +91,7 @@ def _build_factory(func_def, edges, raw_locals, self_name, freevars):
     module = ast.fix_missing_locations(
         ast.Module(body=[ast.copy_location(factory, func_def)], type_ignores=[])
     )
-    return module, frozenset(needed)
+    return module, counts, frozenset(needed)
 
 
 def _cell_contents(cell):
@@ -154,7 +139,7 @@ def compile_node(func, owner, is_node):
     # factory the body is a nested def, which would shadow a free variable of
     # the same name -- a node called `market` closing over a `market`.
     func_def.name = IMPL_NAME
-    module, needed = _build_factory(
+    module, counts, needed = _build_factory(
         func_def,
         rewriter.edges,
         rewriter.raw_locals,
@@ -163,26 +148,17 @@ def compile_node(func, owner, is_node):
     )
     impl, *compiled = _exec_factory(module, func)
 
-    # `compiled` is a (receiver, args, guard) triple per edge, then one lambda
-    # per hoisted local, in the order the factory built them.
-    edge_parts = compiled[: 3 * len(rewriter.edges)]
-    local_parts = compiled[3 * len(rewriter.edges) :]
-
+    # `compiled` is each edge's parts in turn -- how many is the edge kind's
+    # business -- then one lambda per hoisted local, in the order the factory
+    # built them.
     inputs: list[Value | Edge | Local] = [
         Value(index=i, name=name) for name, i in params.items()
     ]
-    triples = zip(edge_parts[0::3], edge_parts[1::3], edge_parts[2::3])
-    for edge, (receiver, args, guard) in zip(rewriter.edges, triples):
-        inputs.append(
-            Edge(
-                index=edge.index,
-                target=edge.target,
-                receiver=receiver,
-                args=args,
-                guard=guard,
-                source=edge.source,
-            )
-        )
+    at = 0
+    for edge, count in zip(rewriter.edges, counts):
+        inputs.append(edge.build(compiled[at : at + count]))
+        at += count
+    local_parts = compiled[at:]
     for local, expr in zip(rewriter.raw_locals, local_parts):
         inputs.append(
             Local(
