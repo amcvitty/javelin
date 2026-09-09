@@ -255,7 +255,7 @@ class TestGuards:
 
 class TestReachingAcrossTheGraph:
     def test_the_receiver_may_be_built_from_the_element(self):
-        """What a book of trade *paths* needs: the element names the object
+        """What a book of position *paths* needs: the element names the object
         rather than being it."""
 
         class Leaf:
