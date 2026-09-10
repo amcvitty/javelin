@@ -71,25 +71,11 @@ the bodies in the order `1, 0, 2, 3, 4, 5`.
 
 ## Vocabulary
 
-| Term | Meaning |
-|---|---|
-| **node** | A method decorated with `@node`. Compiled once, when the class is created. |
-| **cell** | One *invocation* of a node on an object: `fib(5)` and `fib(4)` are different cells. |
-| **key** | How a cell is identified: the flat tuple `(object, method, *args)`. |
-| **terminal** | A constant. The node's own arguments; the key is implicitly the value. |
-| **`Input`** | What fills one `ivs` slot. What `Value`, `Edge` and `Local` share: an `index` and a `reads`. |
-| **`Value`** | An input that is one of the cell's arguments — a terminal. |
-| **`Edge`** | An input reached by calling a method on objects the graph produced. Abstract: it says how many cells one call site names. |
-| **`CallEdge`** | An `Edge` naming one cell. Carries `receiver` and `args` as compiled `(self, node, ivs)` lambdas. |
-| **`MapEdge`** | An `Edge` naming one cell *per element* of a collection — a comprehension (see "Comprehensions"). |
-| **`Local`** | An input that is a body intermediate hoisted above the body. A `(self, node, ivs)` lambda, no dependency of its own (see "Intermediate locals"). |
-| **guard** | The condition under which a call site is reached. `None` means unconditional. An `Edge` carries it twice: `guard` to run, `guard_source` to read. |
-| **`ivs`** | The input-value array a compiled body reads instead of parameters and node calls. |
-| **`reads`** | Per input: the slots resolving *that one* reads, closed through hoisted locals (see below). |
-| **`needed`** | Every slot that expansion has to evaluate — the union of the edges' `reads` (see below). |
-| **override** | A value set on a cell directly, shadowing its body. |
-| **dirty** | A cell whose memoised value is stale because something it depends on changed. |
-| **diddle** | A scope in which overrides are temporary, and undoing them is a restore. |
+Every term this project uses is defined in [CONTEXT.md](CONTEXT.md) — the engine
+ones (node, cell, key, `ivs`, `Edge`, guard, `reads`, `needed`, diddle, ...)
+under "Language — engine", the pricing and namespace ones under "Language —
+analytics". The rest of this README explains how the engine works and assumes
+those words; it does not redefine them.
 
 ## When an edge's shape depends on a value
 
@@ -378,8 +364,13 @@ come from `if`/`else`, ternaries, `and`/`or` short-circuits, and **early
 returns** — statements after `if n < 2: return n` are guarded by `not n < 2`.
 
 Each guard is a `Guard(original, rewritten)` pair: `original` is in terms of the
-node's parameters and is only ever shown to humans (`str(edge)`), `rewritten` is
-in terms of `ivs` and is what gets compiled.
+node's parameters and is only ever shown to humans, `rewritten` is in terms of
+`ivs` and is what gets compiled.
+
+The pair survives compilation: an `Edge` carries `guard`, the compiled
+predicate, and `guard_source`, the readable text. `str(edge)` puts the call site
+and its guard back together, so keeping them in separate fields costs nothing at
+the point of reading and lets a tool show guard status in a column of its own.
 
 `GuardStack.scope()` captures the stack depth **on entry** and truncates to it on
 exit. This matters: an earlier version removed a *count* of guards instead, so a

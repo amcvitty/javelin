@@ -1,13 +1,84 @@
 # Context: beacon-clone
 
-Two layers of vocabulary live here. The **engine** terms (node, cell, key,
-terminal, `Input`, `Value`, `Edge`, `Local`, guard, `ivs`, `reads`, `needed`,
-override, dirty, diddle) are defined in the README's "Vocabulary" table and are
-not repeated here. This file covers the **quant / analytics** domain that the `analytics`
-package builds on top of the engine, and the namespace taxonomy that organises
-persisted objects.
+An Excel-style calculation engine, and a quant pricing library built on it. Two
+layers of vocabulary live here, and this file is the one home for both: the
+**engine** terms the `graph` package defines, and the **analytics** terms the
+`analytics` package and the namespace taxonomy add on top.
 
-## Language — namespace taxonomy
+## Language — engine
+
+**node**:
+A method decorated with `@node`. Compiled once, when its class is created.
+
+**cell**:
+One *invocation* of a node on an object. `fib(5)` and `fib(4)` are different
+cells of the same node.
+
+**key**:
+How a cell is identified: the flat tuple `(object, method, *args)`.
+
+**terminal**:
+An input that needs no computing — a node's own argument, whose value the key
+already carries.
+_Avoid_: leaf, literal.
+
+**`ivs`**:
+The input-value array a compiled body reads in place of its parameters and its
+node calls. One slot per input.
+
+**`Input`**:
+What fills one `ivs` slot: where it sits, and what resolving it reads.
+`Value`, `Edge` and `Local` are the three kinds.
+
+**`Value`**:
+The input kind that is one of the cell's own arguments — a terminal.
+
+**`Edge`**:
+The input kind reached by calling a method on an object the graph produced. How
+many cells one call site names is left to `CallEdge` and `MapEdge`.
+
+**`CallEdge`**:
+An `Edge` naming exactly one cell.
+
+**`MapEdge`**:
+An `Edge` naming one cell per element of a collection — what a comprehension
+compiles to.
+
+**`Local`**:
+The input kind that is a body intermediate hoisted above the body. It fills a
+slot without being a dependency of its own.
+
+**guard**:
+The condition under which a call site is reached. An unconditional call site
+has none.
+_Avoid_: condition, predicate, filter.
+
+**expansion**:
+Working out which cells a cell depends on without running any body. What
+evaluation is not.
+
+**`reads`**:
+Per input: the slots that resolving *that one* input reads, closed through any
+hoisted locals among them.
+
+**`needed`**:
+Every slot expansion has to evaluate for a node — the union of its edges'
+`reads`.
+
+**override**:
+A value set on a cell directly, shadowing its body so the body never runs.
+
+**dirty**:
+A cell whose memoised value is stale because something it depends on changed.
+
+**diddle**:
+A scope in which overrides are temporary: leaving it restores what was
+displaced rather than recomputing.
+_Avoid_: bump, shift, scenario, what-if.
+
+## Language — analytics
+
+### Namespace taxonomy
 
 Every persisted object has a name that is a path under one of six prefixes.
 The prefix says what kind of thing it is; the rest of the path is
@@ -53,7 +124,7 @@ membership is a graph input. Example: `/book/EQD/exotics/london`. See
 `docs/adr/0002-book-representation.md`.
 _Avoid_: portfolio, folder, blotter.
 
-## Language — pricing
+### Pricing
 
 **Market**:
 The `/mkt/EQ/<ticker>/Market` object: the per-asset aggregate of everything
