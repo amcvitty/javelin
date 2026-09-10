@@ -1,9 +1,9 @@
 # Context: beacon-clone
 
 Two layers of vocabulary live here. The **engine** terms (node, cell, key,
-terminal, `Value`, `Edge`, `Local`, guard, `ivs`, `needed`, override, dirty,
-diddle) are defined in the README's "Vocabulary" table and are not repeated
-here. This file covers the **quant / analytics** domain that the `analytics`
+terminal, `Input`, `Value`, `Edge`, `Local`, guard, `ivs`, `reads`, `needed`,
+override, dirty, diddle) are defined in the README's "Vocabulary" table and are
+not repeated here. This file covers the **quant / analytics** domain that the `analytics`
 package builds on top of the engine, and the namespace taxonomy that organises
 persisted objects.
 

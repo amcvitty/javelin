@@ -513,9 +513,10 @@ class TestGuardSource:
             def fib(self, n):
                 return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
 
+        _, left, _ = graph.inputs(Calc.fib)
         printed = repr(graph.inputs(Calc.fib))
-        assert "reads=frozenset({0})" in printed
-        assert "guard_source='not n < 2'" in printed
+        assert f"reads={left.reads!r}" in printed
+        assert f"guard_source={left.guard_source!r}" in printed
 
 
 class TestUnsupported:

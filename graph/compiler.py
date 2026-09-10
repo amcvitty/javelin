@@ -10,7 +10,7 @@ import ast
 import inspect
 import textwrap
 
-from .ir import CompiledNode, Edge, Local, Value
+from .ir import CompiledNode, Input, Local, Value
 from .rewriter import Rewriter, impl_args, ivs_indices
 
 #: What the rewritten body is called inside the factory. Deliberately not the
@@ -44,14 +44,14 @@ def _split_signature(func):
     return parameters[0].name, params, signature.replace(parameters=parameters[1:])
 
 
-def _closed(direct, local_reads):
-    """`direct` widened through the hoisted locals it reaches, recursively.
+def _closed(slots, local_reads):
+    """`slots` widened through the hoisted locals it reaches, recursively.
 
     Reading a local's slot means evaluating it, which means reading whatever
     *it* reads. Edges are not followed: an edge in a read set is resolved for
     its cell, not opened up.
     """
-    reached = set(direct)
+    reached = set(slots)
     pending = list(reached)
     while pending:
         for dep in local_reads.get(pending.pop(), ()):
@@ -71,7 +71,7 @@ def _build_factory(func_def, edges, raw_locals, self_name, freevars):
     """
     parts: list[ast.expr] = [ast.Name(id=func_def.name, ctx=ast.Load())]
     counts = []
-    direct = {}  # ivs index -> the slots its own expressions read
+    read_directly = {}  # ivs index -> the slots its own expressions read
     for edge in edges:
         # Each edge kind says which expressions it needs compiling: a receiver
         # and arguments for one cell, plus a collection for one cell per
@@ -83,13 +83,15 @@ def _build_factory(func_def, edges, raw_locals, self_name, freevars):
         # -- through the object it is called on, its arguments, or the
         # collection it maps over -- has to be evaluated during expansion, not
         # just during evaluation.
-        direct[edge.index] = set().union(*(ivs_indices(p) for p in edge_parts))
+        read_directly[edge.index] = set().union(*(ivs_indices(p) for p in edge_parts))
     for local in raw_locals:
         parts.append(ast.Lambda(args=impl_args(self_name), body=local.value))
-        direct[local.index] = ivs_indices(local.value)
+        read_directly[local.index] = ivs_indices(local.value)
 
-    local_reads = {local.index: direct[local.index] for local in raw_locals}
-    reads = {index: _closed(d, local_reads) for index, d in direct.items()}
+    local_reads = {local.index: read_directly[local.index] for local in raw_locals}
+    reads = {
+        index: _closed(slots, local_reads) for index, slots in read_directly.items()
+    }
 
     factory = ast.FunctionDef(
         name="__make",
@@ -159,8 +161,8 @@ def compile_node(func, owner, is_node):
     # `compiled` is each edge's parts in turn -- how many is the edge kind's
     # business -- then one lambda per hoisted local, in the order the factory
     # built them.
-    inputs: list[Value | Edge | Local] = [
-        Value(index=i, name=name) for name, i in params.items()
+    inputs: list[Input] = [
+        Value(index=i, reads=frozenset(), name=name) for name, i in params.items()
     ]
     at = 0
     for edge, count in zip(rewriter.edges, counts):

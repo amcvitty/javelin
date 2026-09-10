@@ -77,6 +77,7 @@ the bodies in the order `1, 0, 2, 3, 4, 5`.
 | **cell** | One *invocation* of a node on an object: `fib(5)` and `fib(4)` are different cells. |
 | **key** | How a cell is identified: the flat tuple `(object, method, *args)`. |
 | **terminal** | A constant. The node's own arguments; the key is implicitly the value. |
+| **`Input`** | What fills one `ivs` slot. What `Value`, `Edge` and `Local` share: an `index` and a `reads`. |
 | **`Value`** | An input that is one of the cell's arguments — a terminal. |
 | **`Edge`** | An input reached by calling a method on objects the graph produced. Abstract: it says how many cells one call site names. |
 | **`CallEdge`** | An `Edge` naming one cell. Carries `receiver` and `args` as compiled `(self, node, ivs)` lambdas. |
@@ -85,7 +86,7 @@ the bodies in the order `1, 0, 2, 3, 4, 5`.
 | **guard** | The condition under which a call site is reached. `None` means unconditional. An `Edge` carries it twice: `guard` to run, `guard_source` to read. |
 | **`ivs`** | The input-value array a compiled body reads instead of parameters and node calls. |
 | **`reads`** | Per input: the slots resolving *that one* reads, closed through hoisted locals (see below). |
-| **`needed`** | Every slot expansion has to evaluate — the union of the edges' `reads` (see below). |
+| **`needed`** | Every slot that expansion has to evaluate — the union of the edges' `reads` (see below). |
 | **override** | A value set on a cell directly, shadowing its body. |
 | **dirty** | A cell whose memoised value is stale because something it depends on changed. |
 | **diddle** | A scope in which overrides are temporary, and undoing them is a restore. |
@@ -204,9 +205,8 @@ needed = {0}
 Resolving *which object* is the same problem as resolving an edge's arguments,
 and uses the same machinery: the receiver expression is rewritten to read `ivs`,
 and the inputs it reads go into the edge's `reads` — and so into `needed`, so
-expansion evaluates them. Finding
-`Strike`'s dependencies runs `EquityObj` — it has to, that is what names the
-cell — but not `StockPrice`.
+expansion evaluates them. Finding `Strike`'s dependencies runs `EquityObj` — it
+has to, that is what names the cell — but not `StockPrice`.
 
 **Which calls become edges.** Any call whose receiver expression reads `self`.
 The receiver is resolved during expansion and then, if the attribute is a node,
@@ -306,7 +306,7 @@ whole thing running.
 
 ```
 graph/
-  ir.py         Value, Edge (CallEdge, MapEdge), Local, Call, CompiledNode
+  ir.py         Input (Value, Edge -> CallEdge/MapEdge, Local), Call, CompiledNode
   rewriter.py   Guard, GuardStack, RawEdge, RawLocal, Rewriter -- the AST transform
   compiler.py   compile_node(): source -> CompiledNode
   runtime.py    make_key(), Graph, DEFAULT -- cells, deps, values, diddles

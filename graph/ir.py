@@ -22,22 +22,39 @@ from typing import NamedTuple
 
 
 @dataclass(frozen=True)
-class Value:
-    """A terminal input: one of the cell's own arguments."""
+class Input:
+    """What fills one `ivs` slot, and what filling it costs.
+
+    `reads` is that cost: the slots resolving this one input reads, and none
+    of the rest. It is closed through the hoisted locals among them, since
+    reading a local's slot means evaluating it, which means reading whatever
+    *it* reads. Edges are not followed -- an edge in a read set is resolved
+    for its cell, not opened up.
+
+    Usually far smaller than `CompiledNode.needed`, which is every slot
+    expansion evaluates for the node as a whole. Keeping the sets apart is
+    what lets one input be resolved on its own.
+    """
 
     index: int
-    name: str
+    reads: frozenset
 
-    #: Nothing: an argument's value comes free with the key. Carried anyway so
-    #: that every input answers "which slots does resolving this one read?".
-    reads: frozenset = frozenset()
+
+@dataclass(frozen=True)
+class Value(Input):
+    """A terminal input: one of the cell's own arguments.
+
+    Reads nothing: an argument's value comes free with the key.
+    """
+
+    name: str
 
     def __str__(self):
         return self.name
 
 
 @dataclass(frozen=True)
-class Local:
+class Local(Input):
     """An intermediate hoisted out of the body and above it.
 
     A plain `name = <expr>` assignment whose right-hand side, once rewritten,
@@ -47,11 +64,9 @@ class Local:
     of `(self, node, ivs)`; the input adds no dependency of its own.
     """
 
-    index: int
     name: str
     expr: Callable[..., object]  # (self, node, ivs) -> the intermediate's value
     source: str
-    reads: frozenset  # slots `expr` reads, closed through the locals among them
 
     def __str__(self):
         return f"{self.name} = {self.source}"
@@ -71,24 +86,25 @@ class Call(NamedTuple):
 
 
 @dataclass(frozen=True)
-class Edge:
+class Edge(Input):
     """An input reached by calling `target` on objects the graph produced.
 
     Which cells is only known once the edge is resolved against the earlier
     inputs, and only if `guard` -- the condition under which the original call
     site is reached -- holds. Subclasses say how many cells one call site names.
+
+    The guard is carried twice: `guard` to run, `guard_source` to read. Keeping
+    the readable form off `source` is what lets a guard be shown in its own
+    right rather than parsed back out of the call site's text.
+
+    What such an edge `reads` is whatever names its cell: its receiver, its
+    arguments, the collection it maps over, and its guard.
     """
 
-    index: int
     target: str
     guard: Callable[..., bool] | None  # (self, node, ivs) -> bool
     source: str
     guard_source: str | None  # the guard as written, or None if unconditional
-    #: The slots resolving this edge reads -- through its receiver, its
-    #: arguments, the collection it maps over or its guard -- closed through
-    #: the hoisted locals among them. Resolving this one edge needs these and
-    #: nothing else, which is usually far less than `CompiledNode.needed`.
-    reads: frozenset
 
     #: Whether this edge's ivs slot holds a *list* of its cells' values rather
     #: than a single one. The runtime needs to know before it has resolved
@@ -173,7 +189,7 @@ class CompiledNode:
     """One node, compiled."""
 
     impl: object
-    inputs: tuple
+    inputs: tuple[Input, ...]  # one per ivs slot, in slot order
     signature: inspect.Signature  # without self
     needed: frozenset  # union of the edges' read sets: what expansion evaluates
     code: str
