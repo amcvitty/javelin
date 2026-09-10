@@ -56,7 +56,7 @@ def make_key(obj, node, args=(), kwargs=None):
 class _BiMultiMap:
     """A many-to-many relation kept navigable from both ends at once.
 
-    `points_at(key)` is the frozenset `key` maps to; `readers_of(key)` is every
+    `inputs(key)` is the frozenset `key` maps to; `outputs(key)` is every
     key whose set contains it. Only `set` and `discard` write, and each fixes
     both directions, so the forward and reverse views cannot drift out of step
     -- which is the whole reason this is one object rather than two dicts.
@@ -69,11 +69,11 @@ class _BiMultiMap:
     def __contains__(self, key):
         return key in self._forward
 
-    def points_at(self, key):
+    def inputs(self, key):
         """What `key` maps to, or an empty frozenset."""
         return self._forward.get(key, frozenset())
 
-    def readers_of(self, key):
+    def outputs(self, key):
         """The keys that map to `key`. Live -- iterate it, do not mutate it."""
         return self._reverse.get(key, frozenset())
 
@@ -165,7 +165,7 @@ class Graph:
             # A dirty cell is re-expanded: a changed value can reach an edge's
             # arguments or guard, and so change the shape of the graph.
             self._record(key, self._run_inputs(key, evaluate_all=False)[0])
-        return self._deps.points_at(key)
+        return self._deps.inputs(key)
 
     def evaluate(self, key):
         """This cell's value, evaluating its dependencies first."""
@@ -270,7 +270,7 @@ class Graph:
         Walks only the dependent cone, following `_deps` back from readers to
         readers, so the cost is independent of the size of the rest of the graph.
         """
-        pending = list(self._deps.readers_of(key))
+        pending = list(self._deps.outputs(key))
         while pending:
             dependent = pending.pop()
             if dependent in self._dirty or dependent in self._overrides:
@@ -279,7 +279,7 @@ class Graph:
                 continue
             self._touch(dependent)
             self._dirty.add(dependent)
-            pending.extend(self._deps.readers_of(dependent))
+            pending.extend(self._deps.outputs(dependent))
 
     # -- diddle scopes -----------------------------------------------------
 
@@ -308,7 +308,7 @@ class Graph:
         if self._layers and key not in self._layers[-1]:
             self._layers[-1][key] = (
                 self._values.get(key, _MISSING),
-                self._deps.points_at(key) if key in self._deps else _MISSING,
+                self._deps.inputs(key) if key in self._deps else _MISSING,
                 key in self._dirty,
                 self._overrides.get(key, _MISSING),
             )

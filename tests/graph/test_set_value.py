@@ -158,13 +158,13 @@ class TestScaling:
         target = pricers[0]
 
         seen = []
-        real = runtime._BiMultiMap.readers_of
+        real = runtime._BiMultiMap.outputs
 
         def spy(self, key):
             seen.append(key)
             return real(self, key)
 
-        monkeypatch.setattr(runtime._BiMultiMap, "readers_of", spy)
+        monkeypatch.setattr(runtime._BiMultiMap, "outputs", spy)
 
         target.spot.set_value(110.0)
 
