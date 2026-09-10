@@ -28,6 +28,10 @@ class Value:
     index: int
     name: str
 
+    #: Nothing: an argument's value comes free with the key. Carried anyway so
+    #: that every input answers "which slots does resolving this one read?".
+    reads: frozenset = frozenset()
+
     def __str__(self):
         return self.name
 
@@ -47,6 +51,7 @@ class Local:
     name: str
     expr: Callable[..., object]  # (self, node, ivs) -> the intermediate's value
     source: str
+    reads: frozenset  # slots `expr` reads, closed through the locals among them
 
     def __str__(self):
         return f"{self.name} = {self.source}"
@@ -78,6 +83,12 @@ class Edge:
     target: str
     guard: Callable[..., bool] | None  # (self, node, ivs) -> bool
     source: str
+    guard_source: str | None  # the guard as written, or None if unconditional
+    #: The slots resolving this edge reads -- through its receiver, its
+    #: arguments, the collection it maps over or its guard -- closed through
+    #: the hoisted locals among them. Resolving this one edge needs these and
+    #: nothing else, which is usually far less than `CompiledNode.needed`.
+    reads: frozenset
 
     #: Whether this edge's ivs slot holds a *list* of its cells' values rather
     #: than a single one. The runtime needs to know before it has resolved
@@ -93,7 +104,9 @@ class Edge:
         return self.guard is not None and not self.guard(obj, key, ivs)
 
     def __str__(self):
-        return self.source
+        if self.guard_source is None:
+            return self.source
+        return f"{self.source} if {self.guard_source}"
 
 
 @dataclass(frozen=True)
@@ -162,5 +175,5 @@ class CompiledNode:
     impl: object
     inputs: tuple
     signature: inspect.Signature  # without self
-    needed: frozenset  # input indices whose values some later input reads
+    needed: frozenset  # union of the edges' read sets: what expansion evaluates
     code: str

@@ -82,9 +82,10 @@ the bodies in the order `1, 0, 2, 3, 4, 5`.
 | **`CallEdge`** | An `Edge` naming one cell. Carries `receiver` and `args` as compiled `(self, node, ivs)` lambdas. |
 | **`MapEdge`** | An `Edge` naming one cell *per element* of a collection — a comprehension (see "Comprehensions"). |
 | **`Local`** | An input that is a body intermediate hoisted above the body. A `(self, node, ivs)` lambda, no dependency of its own (see "Intermediate locals"). |
-| **guard** | The condition under which a call site is reached. `None` means unconditional. |
+| **guard** | The condition under which a call site is reached. `None` means unconditional. An `Edge` carries it twice: `guard` to run, `guard_source` to read. |
 | **`ivs`** | The input-value array a compiled body reads instead of parameters and node calls. |
-| **`needed`** | Indices whose *values* a later input reads (see below). |
+| **`reads`** | Per input: the slots resolving *that one* reads, closed through hoisted locals (see below). |
+| **`needed`** | Every slot expansion has to evaluate — the union of the edges' `reads` (see below). |
 | **override** | A value set on a cell directly, shadowing its body. |
 | **dirty** | A cell whose memoised value is stale because something it depends on changed. |
 | **diddle** | A scope in which overrides are temporary, and undoing them is a restore. |
@@ -101,10 +102,21 @@ def pick(self, n):
 
 Deciding whether `self.fib(n)` is a dependency requires knowing
 `self.threshold()`. So `threshold` must be evaluated during expansion, while
-`fib` must not be. `CompiledNode.needed` records exactly which input indices
-some later argument expression or guard reads — here `{0, 1}` — and expansion
-evaluates only those. `deps(pick, 5)` is `{threshold, fib(5)}`; `deps(pick, 1)`
-is `{threshold}`.
+`fib` must not be. Each input records the slots resolving *it* reads — the
+`self.fib(n)` edge reads `{0, 1}`, the parameter and `threshold` — and
+`CompiledNode.needed` is the union over the edges, which is what expansion
+evaluates. `deps(pick, 5)` is `{threshold, fib(5)}`; `deps(pick, 1)` is
+`{threshold}`.
+
+A read set is closed transitively through hoisted locals: reading a local's slot
+means evaluating it, which means reading whatever it reads. Edges are not
+followed — an edge in a read set is resolved for its cell, not opened up. The
+union is taken over the edges alone, so a local that nothing shape-forming
+reads stays out of `needed` and is left to evaluation.
+
+Keeping the sets per input, rather than only their union, is what lets a single
+call site be resolved on its own — its own closure is usually far smaller than
+everything `needed` covers.
 
 This is the "edges change the shape of the graph" case: computing which cell you
 depend on is itself a graph computation.
@@ -191,7 +203,8 @@ needed = {0}
 
 Resolving *which object* is the same problem as resolving an edge's arguments,
 and uses the same machinery: the receiver expression is rewritten to read `ivs`,
-and the inputs it reads go into `needed` so expansion evaluates them. Finding
+and the inputs it reads go into the edge's `reads` — and so into `needed`, so
+expansion evaluates them. Finding
 `Strike`'s dependencies runs `EquityObj` — it has to, that is what names the
 cell — but not `StockPrice`.
 

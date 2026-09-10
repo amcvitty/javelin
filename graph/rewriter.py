@@ -172,6 +172,7 @@ class RawEdge:
     target: str
     guard: ast.expr | None
     source: str
+    guard_source: str | None
 
     def _lambda(self, self_name, body, element=None):
         return ast.Lambda(args=impl_args(self_name, element), body=body)
@@ -185,8 +186,12 @@ class RawEdge:
         """The expressions to compile, in the order `build` expects them."""
         raise NotImplementedError
 
-    def build(self, compiled) -> object:
-        """The `Edge` for this call site, from its compiled parts."""
+    def build(self, compiled, reads) -> object:
+        """The `Edge` for this call site, from its compiled parts.
+
+        `reads` is the slots resolving it reads, which only the compiler knows:
+        it is the one thing here that depends on the *other* inputs.
+        """
         raise NotImplementedError
 
 
@@ -205,13 +210,15 @@ class RawCallEdge(RawEdge):
             self._guard_part(self_name),
         ]
 
-    def build(self, compiled):
+    def build(self, compiled, reads):
         receiver, args, guard = compiled
         return CallEdge(
             index=self.index,
             target=self.target,
             guard=guard,
+            guard_source=self.guard_source,
             source=self.source,
+            reads=reads,
             receiver=receiver,
             args=args,
         )
@@ -239,13 +246,15 @@ class RawMapEdge(RawEdge):
             self._guard_part(self_name),
         ]
 
-    def build(self, compiled):
+    def build(self, compiled, reads):
         over, receiver, args, guard = compiled
         return MapEdge(
             index=self.index,
             target=self.target,
             guard=guard,
+            guard_source=self.guard_source,
             source=self.source,
+            reads=reads,
             over=over,
             receiver=receiver,
             args=args,
@@ -388,6 +397,19 @@ class Rewriter(ast.NodeTransformer):
         node.test = self.visit(node.test)
         return Guard(original, node.test)
 
+    def _guard_at(self, source):
+        """The guard in force at a call site, as (expression to compile, text).
+
+        (None, None) when the call site is unconditional. The text is kept
+        apart from the call site's own source so that a guard can be shown in
+        its own right rather than parsed back out of a string.
+        """
+        guard = self.guards.current()
+        if guard is None:
+            return None, None
+        self._check_hoistable(guard.rewritten, source)
+        return guard.rewritten, ast.unparse(guard.original)
+
     # -- the rewrite -------------------------------------------------------
 
     def visit_Name(self, node):
@@ -450,17 +472,15 @@ class Rewriter(ast.NodeTransformer):
         for expr in [receiver, *node.args, *(k.value for k in node.keywords)]:
             self._check_hoistable(expr, source)
 
-        guard = self.guards.current()
-        if guard is not None:
-            self._check_hoistable(guard.rewritten, source)
-            source = f"{source} if {ast.unparse(guard.original)}"
+        guard, guard_source = self._guard_at(source)
 
         index = self._alloc()
         self.edges.append(
             RawCallEdge(
                 index=index,
                 target=func.attr,
-                guard=None if guard is None else guard.rewritten,
+                guard=guard,
+                guard_source=guard_source,
                 source=source,
                 receiver=receiver,
                 args=node.args,
@@ -607,17 +627,15 @@ class Rewriter(ast.NodeTransformer):
         for expr in [receiver, *call.args, *(k.value for k in call.keywords)]:
             self._check_hoistable(expr, source, allow=(var,))
 
-        guard = self.guards.current()
-        if guard is not None:
-            self._check_hoistable(guard.rewritten, source)
-            source = f"{source} if {ast.unparse(guard.original)}"
+        guard, guard_source = self._guard_at(source)
 
         index = self._alloc()
         self.edges.append(
             RawMapEdge(
                 index=index,
                 target=func.attr,
-                guard=None if guard is None else guard.rewritten,
+                guard=guard,
+                guard_source=guard_source,
                 source=source,
                 over=generator.iter,
                 receiver=receiver,
