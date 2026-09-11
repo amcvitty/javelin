@@ -60,14 +60,31 @@ Working out which cells a cell depends on, without running that cell's own
 body. Not free: an edge whose receiver or arguments are themselves cells has
 to have them evaluated before it can say which cell it names.
 
-Over every slot at once (`expand`), it records the answer in the dependency
-map and is the only thing that writes there. Over one slot (`expand_slot`), it
-evaluates only that slot's closure and records nothing — so a cell can never
-be left looking as though it had fewer dependencies than it has. The two
+Over one slot (`expand_slot`) it evaluates only that slot's closure; over
+every slot (`expand`) it takes one pass, filling one `ivs` between them all.
+Either way the answer goes into the cell's expansion record, and the two
 agree: expanding every slot separately names the same cells as expanding the
 cell, give or take the order and duplicates a map edge keeps.
 _Avoid_: resolution, for the action — a slot *is* resolved, but expansion is
 what resolves it.
+
+**expansion record**:
+What the graph holds about one cell's expansion: an entry per `ivs` slot,
+either the cells that slot names or not-yet-resolved. Usually partial, which
+is the point — a slot resolved on its own is worth keeping, and a partial
+record is what makes keeping it safe. Reading a cell's slots fills in the
+statically resolvable ones on the way past, since working them out costs
+nothing. Dirtying a cell resets the slots that
+are not statically resolvable, since a changed value can reach an edge's
+arguments or guard and so move which cell that slot names; the rest are left
+alone, because nothing that dirties the cell can change what they name.
+
+**expanded**:
+Of a cell: every slot resolved — what `expand` leaves behind, however it was
+reached. Read off the slots, not recorded beside them. The invariant: a cell
+carrying a value the graph hands out as clean is expanded, which is what keeps
+a stale shape from being presented as a current one. A dirty cell is exempt,
+and that is what dirty means about the shape as well as about the number.
 
 **`reads`**:
 Per input: the slots that resolving *that one* input reads, closed through any
@@ -91,9 +108,10 @@ hoisted locals still resolves for nothing. The edges in a slot's `reads` are
 what block it.
 
 **`outputs`**:
-The cells that read a given cell — the dependency map followed backwards.
-Known only for cells something has already expanded, which makes the answer
-partial by nature rather than wrong.
+The cells that read a given cell — the expansion records followed backwards.
+Exactly the cells with a *resolved slot* naming it, so one expanded slot is
+enough to be counted and a cell nothing has looked at is absent. Partial by
+nature rather than wrong.
 
 **override**:
 A value set on a cell directly, shadowing its body so the body never runs.
@@ -115,10 +133,10 @@ _Avoid_: bump, shift, scenario, what-if.
 A view of one cell: its object and node, its arguments, its value and state,
 its slots, and the cells that read it — everything already known about it,
 gathered so it can be shown without evaluating anything. Built on demand and
-never stored; the graph holds keys, not cells. A view keeps the slots it has
-resolved, which makes it a reading taken at a moment rather than a live window:
-two views of one key are equal, but only the one that was asked knows what a
-slot resolved to.
+never stored; the graph holds keys, not cells. A view keeps nothing of its
+own: it reads the expansion record back out of the graph every time, so two
+views of one key answer alike, and a slot either of them expands is resolved
+for both.
 
 **`Slot`**:
 One `ivs` slot, described: its index, its kind, its source, its guard, its

@@ -10,3 +10,21 @@ dependencies = [
     "ruff>=0.16.6",
     "ty>=0.0.78",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.1.0",
+]
+
+[tool.coverage.run]
+source = ["analytics", "graph", "ns"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(typing\\.)?overload",
+    "\\.\\.\\.$",
+]

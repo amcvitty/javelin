@@ -41,12 +41,13 @@ evaluates nothing:
 
 Slots whose cells are known for free come back resolved. The rest say what is
 blocking them and wait to be asked, so the cost of looking is paid one slot at
-a time rather than all at once:
+a time rather than all at once -- and paid once, since the graph keeps what
+each slot resolved to:
 
     graph.cell(book.total.key(True)).expand_slot(4)
 """
 
-from .cell import UNRESOLVED, Cell, Slot
+from .cell import Cell, Slot
 from .ir import (
     Call,
     CallEdge,
@@ -59,7 +60,7 @@ from .ir import (
     Value,
 )
 from .node import BoundNode, Marker, Node, Stored, node, stored_nodes
-from .runtime import DEFAULT, CellValue, Graph, ValueState, make_key
+from .runtime import DEFAULT, UNRESOLVED, CellValue, Graph, ValueState, make_key
 
 __all__ = [
     "DEFAULT",
