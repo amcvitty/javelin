@@ -13,12 +13,13 @@ A recursive call site reads the node's own parameter, but a terminal's value
 comes free with the key, so the call site still resolves for nothing; only
 reaching an *edge* costs an evaluation.
 
-Which cells a slot actually resolves to is not filled in here -- every slot
-reports them as `UNRESOLVED`, which is a different answer from a guarded-off
-call site that resolves to no cells at all.
+That cost is what decides when a slot is filled in. A statically resolvable
+slot is resolved as the view's slots are built, since doing so is free; any
+other waits for `resolve`, reporting `UNRESOLVED` until then -- a different
+answer from a guarded-off call site that resolves to no cells at all.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .ir import Edge, Input, InputKind, guarded
 from .runtime import DEFAULT, Graph
@@ -112,6 +113,7 @@ class Cell:
         self.obj = obj
         self.node = node
         self.args = tuple(args)
+        self._slots: list[Slot] | None = None
 
     @property
     def method_name(self):
@@ -130,10 +132,39 @@ class Cell:
 
     @property
     def slots(self):
-        """One `Slot` per `ivs` slot, in slot order, whatever fills it."""
-        inputs = self.node.compiled.inputs
-        edges = frozenset(inp.index for inp in inputs if isinstance(inp, Edge))
-        return tuple(_slot(inp, edges) for inp in inputs)
+        """One `Slot` per `ivs` slot, in slot order, whatever fills it.
+
+        Built on first use and kept, so that a slot resolved through this view
+        stays resolved in it. Statically resolvable slots are resolved as the
+        slots are built, which runs no body; the rest wait to be asked for.
+        """
+        if self._slots is None:
+            inputs = self.node.compiled.inputs
+            edges = frozenset(inp.index for inp in inputs if isinstance(inp, Edge))
+            self._slots = [_slot(inp, edges) for inp in inputs]
+            for slot in list(self._slots):
+                if slot.statically_resolvable:
+                    self._resolve(slot.index)
+        return tuple(self._slots)
+
+    def resolve(self, index):
+        """The cells one of this cell's inputs names, as cells.
+
+        Evaluates only what that input reads -- the cost its `blocked_by`
+        warned about, and no more. Statically resolvable slots are filled in
+        already, and resolving one twice costs nothing the second time.
+        """
+        cells = self.slots[index].cells
+        if isinstance(cells, _Unresolved):
+            cells = self._resolve(index)
+        return cells
+
+    def _resolve(self, index):
+        """Fill one slot in, in place of the record built without it."""
+        assert self._slots is not None  # only ever called once `slots` is built
+        cells = tuple(self._cell(key) for key in self.graph.resolve(self.key, index))
+        self._slots[index] = replace(self._slots[index], cells=cells)
+        return cells
 
     @property
     def outputs(self):
@@ -154,7 +185,11 @@ class Cell:
 
     def _view(self, keys):
         """The same cells, seen through the same graph."""
-        return frozenset(Cell(key, self.graph) for key in keys)
+        return frozenset(self._cell(key) for key in keys)
+
+    def _cell(self, key):
+        """Another cell of the same graph."""
+        return Cell(key, self.graph)
 
     def __eq__(self, other):
         if isinstance(other, Cell):

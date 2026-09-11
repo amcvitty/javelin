@@ -101,9 +101,22 @@ never stored; the graph holds keys, not cells.
 
 **`Slot`**:
 One `ivs` slot, described: its index, its kind, its source, its guard, its
-`reads` and whether it is statically resolvable. Which cells it resolves to is
-a field of its own, so far only ever "not yet resolved". The read-only
-counterpart of `Input`, which is what the runtime runs.
+`reads`, whether it is statically resolvable, and the cells it resolves to.
+The read-only counterpart of `Input`, which is what the runtime runs.
+
+**resolution**:
+Working out which cells *one* slot names, evaluating only that slot's own
+closure. Expansion asks the same question of every slot at once and records
+the answer; resolution asks it one slot at a time and records nothing, so a
+cell can never be left looking as though it had fewer dependencies than it
+has.
+
+**not yet resolved**:
+The third answer a slot can give about its cells, alongside some and none.
+Kept apart from "no cells" because a guard that blocks its call site and a map
+edge over an empty collection genuinely name nothing, and unexplored territory
+is not the same thing.
+_Avoid_: unknown, empty, null.
 
 ## Language — analytics
 

@@ -264,3 +264,48 @@ def make_fib(evaluated=None):
             return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
 
     return Fib
+
+
+def make_book(evaluated=None, holdings=None):
+    """Every slot kind in one node: a terminal, two call edges, a hoisted
+    local and a map edge, with a guard over the last two.
+
+    Returns `(book, positions)`. The positions are handed back so a test can
+    name the cells a map edge resolves to. `holdings` picks the collection the
+    book maps over, as a function of the two positions, so the same shape
+    covers an order, a duplicate and an empty collection.
+    """
+
+    def record(name):
+        if evaluated is not None:
+            evaluated.append(name)
+
+    class Position:
+        @node
+        def pv(self):
+            record("pv")
+            return 5.0
+
+    one, two = Position(), Position()
+    held = [one, two] if holdings is None else list(holdings(one, two))
+
+    class Book:
+        @node
+        def positions(self):
+            record("positions")
+            return held
+
+        @node
+        def rate(self):
+            record("rate")
+            return 0.05
+
+        @node
+        def total(self, live):
+            record("total")
+            scale = self.rate() * 2.0
+            if live:
+                return sum([p.pv() for p in self.positions()]) * scale
+            return 0.0
+
+    return Book(), (one, two)
