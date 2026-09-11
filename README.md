@@ -102,8 +102,19 @@ union is taken over the edges alone, so a local that nothing shape-forming
 reads stays out of `needed` and is left to evaluation.
 
 Keeping the sets per input, rather than only their union, is what lets a single
-call site be resolved on its own — its own closure is usually far smaller than
-everything `needed` covers.
+call site be expanded on its own — its own closure is usually far smaller than
+everything `needed` covers:
+
+```python
+cell = graph.cell(book.total.key(True))
+cell.slots[3].cells  # resolved already: its closure reaches no edge
+cell.slots[4].blocked_by  # {3} — this one would cost an evaluation
+cell.expand_slot(4)  # pay for that one slot, and nothing else
+```
+
+`expand_slot` records nothing. Only `expand`, which takes every slot at once,
+writes to the dependency map — so a cell can never be left looking as though it
+had fewer dependencies than it has.
 
 This is the "edges change the shape of the graph" case: computing which cell you
 depend on is itself a graph computation.

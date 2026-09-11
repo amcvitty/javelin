@@ -38,6 +38,12 @@ slot per input, and the cells that read it -- is gathered by `cell(key)`, which
 evaluates nothing:
 
     graph.cell(note.pv.key()).slots
+
+Slots whose cells are known for free come back resolved. The rest say what is
+blocking them and wait to be asked, so the cost of looking is paid one slot at
+a time rather than all at once:
+
+    graph.cell(book.total.key(True)).expand_slot(4)
 """
 
 from .cell import UNRESOLVED, Cell, Slot

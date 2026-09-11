@@ -15,7 +15,7 @@ import contextlib
 import enum
 from dataclasses import dataclass
 
-from .ir import Local, Value
+from .ir import Edge, Local, Value
 
 _MISSING = object()
 
@@ -78,6 +78,37 @@ def _targets(edge, calls):
             "must resolve the same way"
         )
     return [(call, target) for (call, _), target in zip(resolved, found)]
+
+
+def _fill(edge, ivs, values):
+    """Put an edge's values into its slot: a list for a map, one for a call.
+
+    A guarded-off call site names nothing and leaves its slot alone; the body
+    cannot reach it either.
+    """
+    if edge.collects:
+        ivs[edge.index] = values
+    elif values:
+        ivs[edge.index] = values[0]
+
+
+def _closure(inputs, index):
+    """Every slot that has to be filled in before `index` can be resolved.
+
+    Wider than the input's own `reads`, which the compiler closes through the
+    hoisted locals it reaches and no further: an edge in a read set is there to
+    be resolved for its cell, not opened up. But filling that edge's slot in
+    means resolving it in turn, and so reading whatever *it* reads -- so this
+    walk follows edges as well, which `reads` alone does not.
+    """
+    reached = set()
+    pending = list(inputs[index].reads)
+    while pending:
+        slot = pending.pop()
+        if slot not in reached:
+            reached.add(slot)
+            pending.extend(inputs[slot].reads)
+    return reached
 
 
 def make_key(obj, node, args=(), kwargs=None):
@@ -230,6 +261,32 @@ class Graph:
             self._record(key, self._run_inputs(key, evaluate_all=False)[0])
         return self._deps.inputs(key)
 
+    def expand_slot(self, key, index):
+        """The cells one of this cell's inputs names, as keys.
+
+        `expand` takes every slot a cell has at once, and evaluates whatever
+        all of them read between them. This takes one slot, walking only that
+        slot's own closure -- so a slot reaching no edge is answered without
+        running a body at all, and one that does costs only its own.
+
+        The answer is a tuple rather than a set: a map edge names one cell per
+        element, in the collection's order, duplicates kept. An input that is
+        not an edge names no cells, and a call site its guard blocks names none
+        either -- resolved to nothing, which is not the same as unresolved.
+
+        Records nothing. A partial answer written into the dependency map would
+        leave the cell looking as though it had fewer dependencies than it has,
+        so `expand` stays the only writer.
+        """
+        compiled = key[1].compiled
+        inp = compiled.inputs[index]
+        if not isinstance(inp, Edge):
+            # A terminal or a hoisted local is a value, never a cell.
+            return ()
+        ivs = self._fill_closure(key, _closure(compiled.inputs, index))
+        deps, _ = self._edge_cells(inp, key, ivs, wanted=False)
+        return tuple(deps)
+
     def evaluate(self, key):
         """This cell's value, evaluating its dependencies first."""
         if key in self._overrides:
@@ -257,50 +314,75 @@ class Graph:
         when evaluate_all is set, or when a later input reads it to work out
         which cell it refers to.
         """
-        obj, node, *args = key
-        compiled = node.compiled
+        compiled = key[1].compiled
         ivs: list[object] = [None] * len(compiled.inputs)
         deps = []
         for inp in compiled.inputs:
-            if isinstance(inp, Value):
-                ivs[inp.index] = args[inp.index]
-                continue
-            if isinstance(inp, Local):
-                # A hoisted intermediate: a value, never a dependency. Evaluated
-                # during expansion only if a later input's shape reads it.
-                if evaluate_all or inp.index in compiled.needed:
-                    ivs[inp.index] = inp.expr(obj, key, ivs)
-                continue
-            # An edge names zero or more cells: one call site for a plain call,
-            # one per element for a map. Resolving is always done -- that is
-            # what expansion is -- but the values behind it only when wanted.
-            calls = inp.resolve(obj, key, ivs)
             wanted = evaluate_all or inp.index in compiled.needed
-            values = []
-            for call, target in _targets(inp, calls):
-                if target is None:
-                    # Not a node on this object after all: an ordinary call,
-                    # which is a value rather than a cell.
-                    if wanted:
-                        values.append(
-                            getattr(call.receiver, call.target)(
-                                *call.positional, **call.keywords
-                            )
-                        )
-                    continue
-                dep = make_key(call.receiver, target, call.positional, call.keywords)
-                deps.append(dep)
-                if wanted:
-                    values.append(self.evaluate(dep))
-            if not wanted:
-                continue
-            if inp.collects:
-                ivs[inp.index] = values
-            elif values:
-                # A guarded-off call site names nothing and leaves its slot
-                # alone; the body cannot reach it either.
-                ivs[inp.index] = values[0]
+            deps.extend(self._fill_slot(inp, key, ivs, wanted))
         return frozenset(deps), ivs
+
+    def _fill_closure(self, key, wanted):
+        """An `ivs` array with the slots in `wanted` filled in, and no others.
+
+        A slot can only read slots before it, so one pass in slot order
+        suffices: whatever a slot reads is already there when it is reached.
+        """
+        ivs: list[object] = [None] * len(key[1].compiled.inputs)
+        for inp in key[1].compiled.inputs:
+            if inp.index in wanted:
+                self._fill_slot(inp, key, ivs, True)
+        return ivs
+
+    def _fill_slot(self, inp, key, ivs, wanted):
+        """Put one input's value into its slot, and return the cells it names.
+
+        The one place that knows what each kind of input takes to produce, so
+        that expanding a cell and expanding one slot differ only in which slots
+        they ask for, rather than each carrying its own copy of the cascade.
+        """
+        obj, _, *args = key
+        if isinstance(inp, Value):
+            # An argument's value comes free with the key, so it is always put
+            # in place: there is nothing to save by leaving it out.
+            ivs[inp.index] = args[inp.index]
+            return ()
+        if isinstance(inp, Local):
+            # A hoisted intermediate: a value, never a dependency. Evaluated
+            # during expansion only if a later input's shape reads it.
+            if wanted:
+                ivs[inp.index] = inp.expr(obj, key, ivs)
+            return ()
+        deps, values = self._edge_cells(inp, key, ivs, wanted)
+        if wanted:
+            _fill(inp, ivs, values)
+        return deps
+
+    def _edge_cells(self, edge, key, ivs, wanted):
+        """The cells one edge names, and their values if `wanted`.
+
+        An edge names zero or more cells: one call site for a plain call, one
+        per element for a map. Which cells is always worked out -- that is what
+        expansion is -- but the values behind them only when something asks.
+        """
+        obj = key[0]
+        deps, values = [], []
+        for call, target in _targets(edge, edge.resolve(obj, key, ivs)):
+            if target is None:
+                # Not a node on this object after all: an ordinary call, which
+                # is a value rather than a cell.
+                if wanted:
+                    values.append(
+                        getattr(call.receiver, call.target)(
+                            *call.positional, **call.keywords
+                        )
+                    )
+                continue
+            dep = make_key(call.receiver, target, call.positional, call.keywords)
+            deps.append(dep)
+            if wanted:
+                values.append(self.evaluate(dep))
+        return deps, values
 
     # -- setting values ----------------------------------------------------
 

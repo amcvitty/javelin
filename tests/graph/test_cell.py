@@ -10,46 +10,7 @@ import pytest
 
 import graph
 from graph import InputKind, ValueState, node
-from tests.helpers import make_calc, make_fib, make_pricer
-
-
-def make_book(evaluated=None):
-    """Every slot kind in one node: a terminal, two call edges, a hoisted
-    local and a map edge, with a guard over the last two.
-    """
-
-    def record(name):
-        if evaluated is not None:
-            evaluated.append(name)
-
-    class Position:
-        @node
-        def pv(self):
-            record("pv")
-            return 5.0
-
-    one, two = Position(), Position()
-
-    class Book:
-        @node
-        def positions(self):
-            record("positions")
-            return [one, two]
-
-        @node
-        def rate(self):
-            record("rate")
-            return 0.05
-
-        @node
-        def total(self, live):
-            record("total")
-            scale = self.rate() * 2.0
-            if live:
-                return sum([p.pv() for p in self.positions()]) * scale
-            return 0.0
-
-    return Book()
+from tests.helpers import make_book, make_calc, make_fib, make_pricer
 
 
 class TestCellView:
@@ -209,7 +170,7 @@ class TestSlots:
     """One slot per `ivs` slot, in slot order, whatever fills it."""
 
     def test_every_input_appears_as_a_slot_in_ivs_order(self):
-        book = make_book()
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
@@ -223,7 +184,7 @@ class TestSlots:
         ]
 
     def test_each_slot_reports_its_kind(self):
-        book = make_book()
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
@@ -236,7 +197,7 @@ class TestSlots:
         ]
 
     def test_each_slot_reports_its_call_site_and_its_guard(self):
-        book = make_book()
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
@@ -245,14 +206,14 @@ class TestSlots:
         assert slots[1].guard_source is None
 
     def test_a_slot_that_is_not_an_edge_has_no_guard(self):
-        book = make_book()
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
         assert (slots[0].guard_source, slots[2].guard_source) == (None, None)
 
     def test_each_slot_reports_its_read_set(self):
-        book = make_book()
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
@@ -265,7 +226,7 @@ class TestSlots:
         ]
 
     def test_a_slot_reading_only_terminals_and_locals_resolves_statically(self):
-        book = make_book()
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
@@ -280,7 +241,7 @@ class TestSlots:
         ]
 
     def test_a_slot_that_does_not_resolve_statically_names_its_blockers(self):
-        book = make_book()
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
@@ -288,7 +249,7 @@ class TestSlots:
         assert slots[4].blocked_by == frozenset({3})  # which positions, though?
 
     def test_a_statically_resolvable_slot_names_no_blockers(self):
-        book = make_book()
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
@@ -305,13 +266,15 @@ class TestSlots:
         assert left.reads == frozenset({0})
         assert (left.statically_resolvable, right.statically_resolvable) == (True, True)
 
-    def test_every_slot_reports_its_cells_as_not_yet_resolved(self):
-        book = make_book()
+    def test_a_slot_that_costs_an_evaluation_reports_its_cells_as_unresolved(self):
+        """Which cells such a slot names is in tests/graph/test_resolve.py --
+        here, only that it says it does not know yet, and says so distinguishably
+        from an edge that resolved to no cells at all."""
+        book, _ = make_book()
 
         slots = graph.cell(book.total.key(True)).slots
 
-        assert [slot.cells for slot in slots] == [graph.UNRESOLVED] * 5
-        # Distinct from an edge that resolved to no cells at all.
+        assert [slots[2].cells, slots[4].cells] == [graph.UNRESOLVED] * 2
         assert slots[4].cells != ()
         assert str(graph.UNRESOLVED) == "not yet resolved"
 
@@ -319,7 +282,7 @@ class TestSlots:
 class TestLookingCostsNothing:
     def test_building_a_cell_and_reading_every_slot_runs_no_body(self):
         evaluated = []
-        book = make_book(evaluated)
+        book, _ = make_book(evaluated)
 
         cell = graph.cell(book.total.key(True))
         described = [

@@ -13,12 +13,13 @@ A recursive call site reads the node's own parameter, but a terminal's value
 comes free with the key, so the call site still resolves for nothing; only
 reaching an *edge* costs an evaluation.
 
-Which cells a slot actually resolves to is not filled in here -- every slot
-reports them as `UNRESOLVED`, which is a different answer from a guarded-off
-call site that resolves to no cells at all.
+That cost is what decides when a slot is filled in. A statically resolvable
+slot is resolved as the view's slots are built, since doing so is free; any
+other waits for `expand_slot`, reporting `UNRESOLVED` until then -- a different
+answer from a guarded-off call site that resolves to no cells at all.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .ir import Edge, Input, InputKind, guarded
 from .runtime import DEFAULT, Graph
@@ -88,11 +89,18 @@ def _slot(inp: Input, edges: frozenset):
 
 
 class Cell:
-    """A read-only view of one cell of a graph.
+    """A view of one cell of a graph, read-only as to what the graph records.
 
     Built from a key on demand and thrown away again: the graph holds keys,
     not cells. Equality and hashing are the key's, so a cell can be used
     wherever its key can -- a set of cells equals the set of their keys.
+
+    The one thing a view accumulates is the slots it has resolved, which makes
+    it a reading taken at a moment rather than a live window on the graph. Two
+    views of one key are therefore equal while answering `slots` differently:
+    only the one that was asked knows what a slot resolved to, and a view built
+    before a value changed still reports the shape it found. Build a fresh one
+    to ask again -- which costs nothing, since building resolves nothing dear.
     """
 
     def __init__(self, key, graph: Graph = DEFAULT):
@@ -112,6 +120,7 @@ class Cell:
         self.obj = obj
         self.node = node
         self.args = tuple(args)
+        self._slots: list[Slot] | None = None
 
     @property
     def method_name(self):
@@ -130,10 +139,40 @@ class Cell:
 
     @property
     def slots(self):
-        """One `Slot` per `ivs` slot, in slot order, whatever fills it."""
-        inputs = self.node.compiled.inputs
-        edges = frozenset(inp.index for inp in inputs if isinstance(inp, Edge))
-        return tuple(_slot(inp, edges) for inp in inputs)
+        """One `Slot` per `ivs` slot, in slot order, whatever fills it.
+
+        Built on first use and kept, so that a slot expanded through this view
+        stays resolved in it. Statically resolvable slots are resolved as the
+        slots are built, which runs no body; the rest wait to be asked for.
+        """
+        if self._slots is None:
+            inputs = self.node.compiled.inputs
+            edges = frozenset(inp.index for inp in inputs if isinstance(inp, Edge))
+            self._slots = [_slot(inp, edges) for inp in inputs]
+            static = [slot.index for slot in self._slots if slot.statically_resolvable]
+            for index in static:
+                self._expand_slot(index)
+        return tuple(self._slots)
+
+    def expand_slot(self, index):
+        """The cells one of this cell's inputs names, as cells.
+
+        Evaluates only what that input reads -- the cost its `blocked_by`
+        warned about, and no more. Statically resolvable slots are filled in
+        already, and expanding one twice costs nothing the second time.
+        """
+        cells = self.slots[index].cells
+        if isinstance(cells, _Unresolved):
+            cells = self._expand_slot(index)
+        return cells
+
+    def _expand_slot(self, index):
+        """Fill one slot in, in place of the record built without it."""
+        assert self._slots is not None  # only ever called once `slots` is built
+        keys = self.graph.expand_slot(self.key, index)
+        cells = tuple(Cell(key, self.graph) for key in keys)
+        self._slots[index] = replace(self._slots[index], cells=cells)
+        return cells
 
     @property
     def outputs(self):

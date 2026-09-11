@@ -35,7 +35,9 @@ The input kind that is one of the cell's own arguments — a terminal.
 
 **`Edge`**:
 The input kind reached by calling a method on an object the graph produced. How
-many cells one call site names is left to `CallEdge` and `MapEdge`.
+many cells one call site names is left to `CallEdge` and `MapEdge`. Asking one
+to `resolve` gives back call sites, not cells — turning those into cells is the
+graph's job, and is what expansion does with them.
 
 **`CallEdge`**:
 An `Edge` naming exactly one cell.
@@ -54,8 +56,18 @@ has none.
 _Avoid_: condition, predicate, filter.
 
 **expansion**:
-Working out which cells a cell depends on without running any body. What
-evaluation is not.
+Working out which cells a cell depends on, without running that cell's own
+body. Not free: an edge whose receiver or arguments are themselves cells has
+to have them evaluated before it can say which cell it names.
+
+Over every slot at once (`expand`), it records the answer in the dependency
+map and is the only thing that writes there. Over one slot (`expand_slot`), it
+evaluates only that slot's closure and records nothing — so a cell can never
+be left looking as though it had fewer dependencies than it has. The two
+agree: expanding every slot separately names the same cells as expanding the
+cell, give or take the order and duplicates a map edge keeps.
+_Avoid_: resolution, for the action — a slot *is* resolved, but expansion is
+what resolves it.
 
 **`reads`**:
 Per input: the slots that resolving *that one* input reads, closed through any
@@ -64,6 +76,12 @@ hoisted locals among them.
 **`needed`**:
 Every slot expansion has to evaluate for a node — the union of its edges'
 `reads`.
+
+**closure**:
+Of a slot: every slot that has to be filled in before this one can be
+resolved. Wider than `reads`, which stops at the edges it reaches — getting an
+edge's value means resolving that edge in turn, so the closure follows it on.
+Narrower than `needed`, which is every slot's closure at once.
 
 **statically resolvable**:
 Of a slot: which cells it names is known without evaluating anything, because
@@ -97,13 +115,22 @@ _Avoid_: bump, shift, scenario, what-if.
 A view of one cell: its object and node, its arguments, its value and state,
 its slots, and the cells that read it — everything already known about it,
 gathered so it can be shown without evaluating anything. Built on demand and
-never stored; the graph holds keys, not cells.
+never stored; the graph holds keys, not cells. A view keeps the slots it has
+resolved, which makes it a reading taken at a moment rather than a live window:
+two views of one key are equal, but only the one that was asked knows what a
+slot resolved to.
 
 **`Slot`**:
 One `ivs` slot, described: its index, its kind, its source, its guard, its
-`reads` and whether it is statically resolvable. Which cells it resolves to is
-a field of its own, so far only ever "not yet resolved". The read-only
-counterpart of `Input`, which is what the runtime runs.
+`reads`, whether it is statically resolvable, and the cells it resolves to.
+The read-only counterpart of `Input`, which is what the runtime runs.
+
+**not yet resolved**:
+The third answer a slot can give about its cells, alongside some and none.
+Kept apart from "no cells" because a guard that blocks its call site and a map
+edge over an empty collection genuinely name nothing, and unexplored territory
+is not the same thing.
+_Avoid_: unknown, empty, null.
 
 ## Language — analytics
 
