@@ -16,6 +16,7 @@ new `resolve`, not a new branch everywhere.
 """
 
 import enum
+import functools
 import inspect
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -218,10 +219,33 @@ class MapEdge(Edge):
 
 @dataclass(frozen=True)
 class CompiledNode:
-    """One node, compiled."""
+    """One node, compiled.
+
+    `blocked_by` is per slot what `needed` is for the node as a whole: the
+    edges among that one slot's `reads`, and so what stands between it and the
+    cells it names. Worked out once here rather than by everything that asks,
+    since it follows from the inputs and the inputs never change.
+    """
 
     impl: object
     inputs: tuple[Input, ...]  # one per ivs slot, in slot order
     signature: inspect.Signature  # without self
     needed: frozenset  # union of the edges' read sets: what expansion evaluates
+    blocked_by: tuple[frozenset, ...]  # per slot: the edges among its reads
     code: str
+
+    @functools.cached_property
+    def static(self):
+        """The statically resolvable slots: nothing blocks what they name."""
+        return frozenset(
+            index for index, blockers in enumerate(self.blocked_by) if not blockers
+        )
+
+    @functools.cached_property
+    def not_static(self):
+        """The rest -- the slots whose cells a value elsewhere could change.
+
+        What dirtying a cell forgets, since a changed value can reach an edge's
+        arguments or its guard and so move which cell that slot names.
+        """
+        return frozenset(range(len(self.blocked_by))) - self.static

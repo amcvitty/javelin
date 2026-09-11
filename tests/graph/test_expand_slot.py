@@ -8,6 +8,9 @@ closure evaluated to get it.
 That is what makes the cost of looking visible. A slot whose closure reaches
 no edge is resolved for free, so a cell view fills those in without being
 asked; anything dearer waits until someone asks for it by name.
+
+Either way the answer is recorded, one slot of the cell's record at a time --
+what that means for the graph as a whole is in test_expansion_state.py.
 """
 
 import graph
@@ -218,8 +221,8 @@ def make_nested():
     """A pick whose index is itself a cell with a dependency of its own.
 
     Expanding the pick's slot has to evaluate `held`, and evaluating `held`
-    records what *it* reads -- so the shape distinguishes the dependencies
-    `expand_slot` must not write from the ones evaluation always has.
+    records what *it* reads -- so the shape tells the one slot `expand_slot`
+    records apart from the whole record evaluating a cell writes.
     """
 
     class Nested:
@@ -242,36 +245,37 @@ def make_nested():
     return Nested()
 
 
-class TestDependenciesAreLeftAlone:
-    """`expand` stays the only writer of the dependency map."""
+class TestWhatExpandingOneSlotRecords:
+    """One slot, recorded as one slot: the rest of the record is untouched."""
 
-    def test_expanding_one_slot_records_no_dependency_for_the_cell(self):
-        book, _ = make_book()
+    def test_expanding_one_slot_records_that_slot_and_no_other(self):
+        book, (one, two) = make_book()
 
         graph.cell(book.total.key(True)).expand_slot(4)
 
-        # Nothing has been told that total reads positions, because nothing
-        # asked total what it depends on.
-        assert graph.cell(book.positions.key()).outputs == frozenset()
+        slots = graph.cell(book.total.key(True)).slots
+        assert slots[4].cells == (one.pv.key(), two.pv.key())
+        assert slots[2].cells is graph.UNRESOLVED  # nobody asked about this one
+
+    def test_the_cell_being_expanded_joins_the_graph(self):
+        """A cell one slot has been expanded on is a cell the graph knows
+        about -- which is what lets dirty propagation reach it."""
+        nested = make_nested()
+
+        graph.cell(nested.pick.key()).expand_slot(1)
+
+        assert nested.pick.key() in graph.all_nodes()
 
     def test_a_cell_the_closure_evaluates_records_its_own_dependencies(self):
-        """`expand_slot` writes nothing for the cell it is called on. The cells it
-        evaluates on the way are another matter: evaluating one has always
-        recorded what it reads, and a value asked for here is no different from
-        one asked for anywhere else."""
+        """Evaluating a cell on the way has always recorded what it reads, and
+        a value asked for here is no different from one asked for anywhere
+        else -- so `held` reads `base`, and `pick` reads `held`."""
         nested = make_nested()
 
         graph.cell(nested.pick.key()).expand_slot(1)
 
         assert graph.cell(nested.base.key()).outputs == {nested.held.key()}
-        assert graph.cell(nested.held.key()).outputs == frozenset()  # not pick
-
-    def test_the_cell_being_expanded_stays_out_of_the_graph(self):
-        nested = make_nested()
-
-        graph.cell(nested.pick.key()).expand_slot(1)
-
-        assert nested.pick.key() not in graph.all_nodes()
+        assert graph.cell(nested.held.key()).outputs == {nested.pick.key()}
 
     def test_expanding_the_whole_cell_afterwards_finds_every_dependency(self):
         book, (one, two) = make_book()

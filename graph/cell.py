@@ -14,31 +14,19 @@ comes free with the key, so the call site still resolves for nothing; only
 reaching an *edge* costs an evaluation.
 
 That cost is what decides when a slot is filled in. A statically resolvable
-slot is resolved as the view's slots are built, since doing so is free; any
-other waits for `expand_slot`, reporting `UNRESOLVED` until then -- a different
-answer from a guarded-off call site that resolves to no cells at all.
+slot is resolved as the slots are read, since doing so is free; any other waits
+for `expand_slot`, reporting `UNRESOLVED` until then -- a different answer from
+a guarded-off call site that resolves to no cells at all.
+
+The view keeps none of this. Every slot it reports it reads back out of the
+graph, which is where expansion records what it worked out, so two views of one
+key answer alike and a slot one of them expanded is resolved in the other.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from .ir import Edge, Input, InputKind, guarded
-from .runtime import DEFAULT, Graph
-
-
-class _Unresolved:
-    """The answer to "which cells?" before anyone has gone and looked.
-
-    A singleton rather than None, which a caller would read as "no cells".
-    """
-
-    __slots__ = ()
-
-    def __repr__(self):
-        return "not yet resolved"
-
-
-#: What a slot's cells are until something resolves them.
-UNRESOLVED = _Unresolved()
+from .runtime import DEFAULT, UNRESOLVED, Graph, _Unresolved
 
 
 @dataclass(frozen=True)
@@ -51,6 +39,9 @@ class Slot:
 
     `blocked_by` is the edges in `reads`: the slots that have to be evaluated
     before this one's cells can be named. Empty means statically resolvable.
+
+    `cells` is what the graph has recorded for this slot: the cells it names,
+    or `UNRESOLVED` if nothing has looked yet.
     """
 
     index: int
@@ -70,8 +61,8 @@ class Slot:
         return guarded(self.source, self.guard_source)
 
 
-def _slot(inp: Input, edges: frozenset):
-    """Describe one input, given which of the node's slots are edges.
+def _slot(inp: Input, blocked_by: frozenset, cells):
+    """Describe one input, given its blockers and what the graph has recorded.
 
     The one thing asked of the input is whether it is an edge -- not which
     kind of edge, which is the input's own business. Only an edge has a call
@@ -84,7 +75,8 @@ def _slot(inp: Input, edges: frozenset):
         source=inp.source if edge else str(inp),
         guard_source=inp.guard_source if edge else None,
         reads=inp.reads,
-        blocked_by=inp.reads & edges,
+        blocked_by=blocked_by,
+        cells=cells,
     )
 
 
@@ -95,12 +87,9 @@ class Cell:
     not cells. Equality and hashing are the key's, so a cell can be used
     wherever its key can -- a set of cells equals the set of their keys.
 
-    The one thing a view accumulates is the slots it has resolved, which makes
-    it a reading taken at a moment rather than a live window on the graph. Two
-    views of one key are therefore equal while answering `slots` differently:
-    only the one that was asked knows what a slot resolved to, and a view built
-    before a value changed still reports the shape it found. Build a fresh one
-    to ask again -- which costs nothing, since building resolves nothing dear.
+    A view accumulates nothing: it reads through to the graph every time, so
+    two views of one key answer alike, and a slot either of them expands is
+    resolved for both and for every view built afterwards.
     """
 
     def __init__(self, key, graph: Graph = DEFAULT):
@@ -120,7 +109,6 @@ class Cell:
         self.obj = obj
         self.node = node
         self.args = tuple(args)
-        self._slots: list[Slot] | None = None
 
     @property
     def method_name(self):
@@ -141,38 +129,52 @@ class Cell:
     def slots(self):
         """One `Slot` per `ivs` slot, in slot order, whatever fills it.
 
-        Built on first use and kept, so that a slot expanded through this view
-        stays resolved in it. Statically resolvable slots are resolved as the
-        slots are built, which runs no body; the rest wait to be asked for.
+        Read off the graph's record of this cell, so a slot anything has
+        expanded comes back resolved. Statically resolvable slots are resolved
+        as the record is read, which runs no body; the rest wait to be asked.
         """
-        if self._slots is None:
-            inputs = self.node.compiled.inputs
-            edges = frozenset(inp.index for inp in inputs if isinstance(inp, Edge))
-            self._slots = [_slot(inp, edges) for inp in inputs]
-            static = [slot.index for slot in self._slots if slot.statically_resolvable]
-            for index in static:
-                self._expand_slot(index)
-        return tuple(self._slots)
+        compiled = self.node.compiled
+        recorded = self.graph.slots(self.key)
+        return tuple(
+            _slot(inp, compiled.blocked_by[inp.index], self._cells(recorded[inp.index]))
+            for inp in compiled.inputs
+        )
+
+    @property
+    def expanded(self):
+        """Whether every slot has been resolved -- read straight off them.
+
+        What `expand` leaves behind, in other words, however it was reached:
+        a cell every slot of which was expanded on its own is expanded. The
+        invariant this stands next to: a cell carrying a value the graph hands
+        out as clean is expanded. A dirty one need not be, since dirtying it
+        forgets the slots a changed value could have moved.
+        """
+        return all(slot.cells is not UNRESOLVED for slot in self.slots)
 
     def expand_slot(self, index):
         """The cells one of this cell's inputs names, as cells.
 
         Evaluates only what that input reads -- the cost its `blocked_by`
         warned about, and no more. Statically resolvable slots are filled in
-        already, and expanding one twice costs nothing the second time.
+        already, and expanding one twice costs nothing the second time,
+        whichever view did it first.
         """
-        cells = self.slots[index].cells
-        if isinstance(cells, _Unresolved):
-            cells = self._expand_slot(index)
-        return cells
+        return self._ordered(self.graph.expand_slot(self.key, index))
 
-    def _expand_slot(self, index):
-        """Fill one slot in, in place of the record built without it."""
-        assert self._slots is not None  # only ever called once `slots` is built
-        keys = self.graph.expand_slot(self.key, index)
-        cells = tuple(Cell(key, self.graph) for key in keys)
-        self._slots[index] = replace(self._slots[index], cells=cells)
-        return cells
+    def _cells(self, recorded):
+        """A recorded slot's keys as views, leaving `UNRESOLVED` as it is."""
+        if recorded is UNRESOLVED:
+            return recorded
+        return self._ordered(recorded)
+
+    def _ordered(self, keys):
+        """The same cells, seen through the same graph, in the order given.
+
+        A map edge names one cell per element, so the order and the duplicates
+        are part of the answer -- which is why this is not `_view`.
+        """
+        return tuple(Cell(key, self.graph) for key in keys)
 
     @property
     def outputs(self):

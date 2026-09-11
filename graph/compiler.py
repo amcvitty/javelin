@@ -10,7 +10,7 @@ import ast
 import inspect
 import textwrap
 
-from .ir import CompiledNode, Input, Local, Value
+from .ir import CompiledNode, Edge, Input, Local, Value
 from .rewriter import Rewriter, impl_args, ivs_indices
 
 #: What the rewritten body is called inside the factory. Deliberately not the
@@ -187,10 +187,18 @@ def compile_node(func, owner, is_node):
     # own read set covers.
     needed = frozenset().union(*(reads[edge.index] for edge in rewriter.edges))
 
+    # And per slot, the edges among its own reads: what stands between that one
+    # slot and the cells it names. Empty means statically resolvable -- reading
+    # nothing is the wrong test, since a terminal's value comes free with the
+    # key and a hoisted local is folded into the read set already.
+    edges = frozenset(inp.index for inp in inputs if isinstance(inp, Edge))
+    blocked_by = tuple(inp.reads & edges for inp in inputs)
+
     return CompiledNode(
         impl=impl,
         inputs=tuple(inputs),
         signature=signature,
         needed=needed,
+        blocked_by=blocked_by,
         code=code,
     )
