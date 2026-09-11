@@ -32,28 +32,52 @@ recomputation:
     with diddle((md.spot, 110.0), (call.strike, 95.0)):
         note.pv()      # sees the overrides
     note.pv()          # pre-diddle value, straight from the restored cache
+
+What the engine knows about one cell -- its value and how current that is, a
+slot per input, and the cells that read it -- is gathered by `cell(key)`, which
+evaluates nothing:
+
+    graph.cell(note.pv.key()).slots
 """
 
-from .ir import Call, CallEdge, CompiledNode, Edge, Input, Local, MapEdge, Value
+from .cell import UNRESOLVED, Cell, Slot
+from .ir import (
+    Call,
+    CallEdge,
+    CompiledNode,
+    Edge,
+    Input,
+    InputKind,
+    Local,
+    MapEdge,
+    Value,
+)
 from .node import BoundNode, Marker, Node, Stored, node, stored_nodes
-from .runtime import DEFAULT, Graph, make_key
+from .runtime import DEFAULT, CellValue, Graph, ValueState, make_key
 
 __all__ = [
     "DEFAULT",
+    "UNRESOLVED",
     "BoundNode",
     "Call",
     "CallEdge",
+    "Cell",
+    "CellValue",
     "CompiledNode",
     "Edge",
     "Graph",
     "Input",
+    "InputKind",
     "Local",
     "MapEdge",
     "Marker",
     "Node",
+    "Slot",
     "Stored",
     "Value",
+    "ValueState",
     "all_nodes",
+    "cell",
     "clear",
     "code",
     "deps",
@@ -87,6 +111,16 @@ def code(method):
 def deps(method, *args, **kwargs):
     """The direct dependencies of the cell obj.method(*args), as node keys."""
     return DEFAULT.deps(method, *args, **kwargs)
+
+
+def cell(key):
+    """A read-only view of one cell of the default graph.
+
+    Takes a key -- `(object, node, *args)`, which `BoundNode.key()` builds --
+    and gathers what is known about it: its value and state, its slots, and
+    the cells that read it. Builds nothing and evaluates nothing.
+    """
+    return Cell(key)
 
 
 def all_nodes():

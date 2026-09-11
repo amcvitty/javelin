@@ -12,10 +12,48 @@ temporary: the scope remembers what it displaced and puts it back on exit.
 """
 
 import contextlib
+import enum
+from dataclasses import dataclass
 
 from .ir import Local, Value
 
 _MISSING = object()
+
+
+class ValueState(enum.Enum):
+    """What a cell's value is worth right now.
+
+    Four states, and the difference between them matters every time a value
+    is shown: `DIRTY` still has a number, but that number is out of date.
+    """
+
+    UNCOMPUTED = "uncomputed"  # no value at all; the body has never run
+    CLEAN = "clean"  # memoised, and nothing it reads has changed since
+    DIRTY = "dirty"  # memoised, but stale: it recomputes when next asked
+    OVERRIDDEN = "overridden"  # set directly, so the body never runs
+
+    def __str__(self):
+        return self.value
+
+
+@dataclass(frozen=True)
+class CellValue:
+    """A cell's value together with the state that qualifies it.
+
+    The two travel as one so that neither can be shown without the other: a
+    stale value read on its own would look exactly like a current one.
+    `value` means nothing when the state is `UNCOMPUTED`.
+    """
+
+    state: ValueState
+    value: object = None
+
+    def __str__(self):
+        if self.state is ValueState.UNCOMPUTED:
+            return str(self.state)
+        if self.state is ValueState.CLEAN:
+            return repr(self.value)
+        return f"{self.value!r} ({self.state})"
 
 
 def _targets(edge, calls):
@@ -122,6 +160,31 @@ class Graph:
     def all_nodes(self):
         """Every known cell, as (object, method, *args) keys."""
         return tuple(self._known)
+
+    def outputs(self, key):
+        """The cells known to read this one, as keys.
+
+        Read off the reverse direction of the dependency map, so a cell that
+        nothing has expanded yet is not in it. That partiality is the honest
+        answer: until something asks what a cell depends on, the graph has
+        not been told.
+        """
+        return frozenset(self._deps.outputs(key))
+
+    def value(self, key):
+        """This cell's value as it stands, and the state that qualifies it.
+
+        Computes nothing: a cell that has never run reports `UNCOMPUTED`
+        rather than being evaluated to answer.
+        """
+        if key in self._overrides:
+            return CellValue(ValueState.OVERRIDDEN, self._overrides[key])
+        if key not in self._values:
+            return CellValue(ValueState.UNCOMPUTED)
+        dirty = key in self._dirty
+        return CellValue(
+            ValueState.DIRTY if dirty else ValueState.CLEAN, self._values[key]
+        )
 
     def deps(self, method, *args, **kwargs):
         """The direct dependencies of the cell obj.method(*args), as keys.

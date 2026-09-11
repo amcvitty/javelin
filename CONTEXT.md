@@ -65,16 +65,45 @@ hoisted locals among them.
 Every slot expansion has to evaluate for a node — the union of its edges'
 `reads`.
 
+**statically resolvable**:
+Of a slot: which cells it names is known without evaluating anything, because
+its `reads` reach no edge. Reading nothing is the wrong test — a terminal's
+value comes free with the key, so a call site reading only terminals and
+hoisted locals still resolves for nothing. The edges in a slot's `reads` are
+what block it.
+
+**`outputs`**:
+The cells that read a given cell — the dependency map followed backwards.
+Known only for cells something has already expanded, which makes the answer
+partial by nature rather than wrong.
+
 **override**:
 A value set on a cell directly, shadowing its body so the body never runs.
 
 **dirty**:
 A cell whose memoised value is stale because something it depends on changed.
 
+**value state**:
+Which of four a cell's value is in: uncomputed, memoised and clean, memoised
+but dirty, or overridden. Carried with the value wherever a value is shown, so
+a stale one is never presentable as though it were current.
+
 **diddle**:
 A scope in which overrides are temporary: leaving it restores what was
 displaced rather than recomputing.
 _Avoid_: bump, shift, scenario, what-if.
+
+**`Cell`**:
+A view of one cell: its object and node, its arguments, its value and state,
+its slots, and the cells that read it — everything already known about it,
+gathered so it can be shown without evaluating anything. Built on demand and
+never stored; the graph holds keys, not cells.
+
+**`Slot`**:
+One `ivs` slot, described: its index, its kind, its source, its guard, its
+`reads` and whether it is statically resolvable. Which cells it resolves to is
+a field of its own, so far only ever "not yet resolved". The read-only
+counterpart of `Input`, which is what the runtime runs.
 
 ## Language — analytics
 

@@ -15,10 +15,34 @@ keys and does not care how many an edge produced, so a further kind of edge is a
 new `resolve`, not a new branch everywhere.
 """
 
+import enum
 import inspect
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import ClassVar, NamedTuple
+
+
+class InputKind(enum.Enum):
+    """Which kind of input fills a slot, in the words a reader wants.
+
+    Each input class names its own kind, so a further kind of edge is one more
+    member here rather than a branch in everything that describes a slot.
+    """
+
+    TERMINAL = "terminal"
+    LOCAL = "hoisted local"
+    CALL_EDGE = "call edge"
+    MAP_EDGE = "map edge"
+
+    def __str__(self):
+        return self.value
+
+
+def guarded(source, guard_source):
+    """A call site and the guard it is reached under, written as one line."""
+    if guard_source is None:
+        return source
+    return f"{source} if {guard_source}"
 
 
 @dataclass(frozen=True)
@@ -36,6 +60,8 @@ class Input:
     what lets one input be resolved on its own.
     """
 
+    kind: ClassVar[InputKind]
+
     index: int
     reads: frozenset
 
@@ -46,6 +72,8 @@ class Value(Input):
 
     Reads nothing: an argument's value comes free with the key.
     """
+
+    kind = InputKind.TERMINAL
 
     name: str
 
@@ -63,6 +91,8 @@ class Local(Input):
     a later edge's arguments or guard may refer to it. `expr` is a pure function
     of `(self, node, ivs)`; the input adds no dependency of its own.
     """
+
+    kind = InputKind.LOCAL
 
     name: str
     expr: Callable[..., object]  # (self, node, ivs) -> the intermediate's value
@@ -120,9 +150,7 @@ class Edge(Input):
         return self.guard is not None and not self.guard(obj, key, ivs)
 
     def __str__(self):
-        if self.guard_source is None:
-            return self.source
-        return f"{self.source} if {self.guard_source}"
+        return guarded(self.source, self.guard_source)
 
 
 @dataclass(frozen=True)
@@ -133,6 +161,8 @@ class CallEdge(Edge):
     object for a call reaching across the graph. Both it and `args` are pure
     functions of (self, node, ivs).
     """
+
+    kind = InputKind.CALL_EDGE
 
     receiver: Callable[..., object]
     args: Callable[..., tuple]
@@ -156,6 +186,8 @@ class MapEdge(Edge):
     The ivs slot holds the cells' values as a list, in the collection's own
     order and with duplicates kept -- what the comprehension would have built.
     """
+
+    kind = InputKind.MAP_EDGE
 
     over: Callable[..., Iterable]
     receiver: Callable[..., object]
