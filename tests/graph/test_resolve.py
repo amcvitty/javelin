@@ -214,6 +214,34 @@ class TestMapEdges:
         assert cells == (two.pv.key(), one.pv.key())
 
 
+def make_nested():
+    """A pick whose index is itself a cell with a dependency of its own.
+
+    Resolving the pick has to evaluate `held`, and evaluating `held` records
+    what *it* reads -- so the shape distinguishes the dependencies resolution
+    must not write from the ones ordinary evaluation always has.
+    """
+
+    class Nested:
+        @node
+        def base(self):
+            return 1
+
+        @node
+        def held(self):
+            return self.base() + 1
+
+        @node
+        def item(self, n):
+            return n * 10
+
+        @node
+        def pick(self):
+            return self.item(self.held())
+
+    return Nested()
+
+
 class TestDependenciesAreLeftAlone:
     """Full expansion stays the only writer of the dependency map."""
 
@@ -225,6 +253,25 @@ class TestDependenciesAreLeftAlone:
         # Nothing has been told that total reads positions, because nothing
         # asked total what it depends on.
         assert graph.cell(book.positions.key()).outputs == frozenset()
+
+    def test_a_cell_the_closure_evaluates_records_its_own_dependencies(self):
+        """Resolution writes nothing for the cell being resolved. The cells it
+        evaluates on the way are another matter: evaluating one has always
+        recorded what it reads, and a value asked for here is no different from
+        one asked for anywhere else."""
+        nested = make_nested()
+
+        graph.cell(nested.pick.key()).resolve(1)
+
+        assert graph.cell(nested.base.key()).outputs == {nested.held.key()}
+        assert graph.cell(nested.held.key()).outputs == frozenset()  # not pick
+
+    def test_the_cell_being_resolved_stays_out_of_the_graph(self):
+        nested = make_nested()
+
+        graph.cell(nested.pick.key()).resolve(1)
+
+        assert nested.pick.key() not in graph.all_nodes()
 
     def test_expansion_after_partial_resolution_finds_every_dependency(self):
         book, (one, two) = make_book()

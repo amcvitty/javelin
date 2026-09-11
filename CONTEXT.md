@@ -65,6 +65,12 @@ hoisted locals among them.
 Every slot expansion has to evaluate for a node — the union of its edges'
 `reads`.
 
+**closure**:
+Of a slot: every slot that has to be filled in before this one can be
+resolved. Wider than `reads`, which stops at the edges it reaches — getting an
+edge's value means resolving that edge in turn, so the closure follows it on.
+Narrower than `needed`, which is every slot's closure at once.
+
 **statically resolvable**:
 Of a slot: which cells it names is known without evaluating anything, because
 its `reads` reach no edge. Reading nothing is the wrong test — a terminal's
@@ -97,7 +103,10 @@ _Avoid_: bump, shift, scenario, what-if.
 A view of one cell: its object and node, its arguments, its value and state,
 its slots, and the cells that read it — everything already known about it,
 gathered so it can be shown without evaluating anything. Built on demand and
-never stored; the graph holds keys, not cells.
+never stored; the graph holds keys, not cells. A view keeps the slots it has
+resolved, which makes it a reading taken at a moment rather than a live window:
+two views of one key are equal, but only the one that was asked knows what a
+slot resolved to.
 
 **`Slot`**:
 One `ivs` slot, described: its index, its kind, its source, its guard, its

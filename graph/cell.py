@@ -89,11 +89,18 @@ def _slot(inp: Input, edges: frozenset):
 
 
 class Cell:
-    """A read-only view of one cell of a graph.
+    """A view of one cell of a graph, read-only as to what the graph records.
 
     Built from a key on demand and thrown away again: the graph holds keys,
     not cells. Equality and hashing are the key's, so a cell can be used
     wherever its key can -- a set of cells equals the set of their keys.
+
+    The one thing a view accumulates is the slots it has resolved, which makes
+    it a reading taken at a moment rather than a live window on the graph. Two
+    views of one key are therefore equal while answering `slots` differently:
+    only the one that was asked knows what a slot resolved to, and a view built
+    before a value changed still reports the shape it found. Build a fresh one
+    to ask again -- which costs nothing, since building resolves nothing dear.
     """
 
     def __init__(self, key, graph: Graph = DEFAULT):
@@ -142,9 +149,9 @@ class Cell:
             inputs = self.node.compiled.inputs
             edges = frozenset(inp.index for inp in inputs if isinstance(inp, Edge))
             self._slots = [_slot(inp, edges) for inp in inputs]
-            for slot in list(self._slots):
-                if slot.statically_resolvable:
-                    self._resolve(slot.index)
+            static = [slot.index for slot in self._slots if slot.statically_resolvable]
+            for index in static:
+                self._resolve(index)
         return tuple(self._slots)
 
     def resolve(self, index):
@@ -162,7 +169,8 @@ class Cell:
     def _resolve(self, index):
         """Fill one slot in, in place of the record built without it."""
         assert self._slots is not None  # only ever called once `slots` is built
-        cells = tuple(self._cell(key) for key in self.graph.resolve(self.key, index))
+        keys = self.graph.resolve(self.key, index)
+        cells = tuple(Cell(key, self.graph) for key in keys)
         self._slots[index] = replace(self._slots[index], cells=cells)
         return cells
 
@@ -185,11 +193,7 @@ class Cell:
 
     def _view(self, keys):
         """The same cells, seen through the same graph."""
-        return frozenset(self._cell(key) for key in keys)
-
-    def _cell(self, key):
-        """Another cell of the same graph."""
-        return Cell(key, self.graph)
+        return frozenset(Cell(key, self.graph) for key in keys)
 
     def __eq__(self, other):
         if isinstance(other, Cell):

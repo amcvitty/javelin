@@ -95,10 +95,11 @@ def _fill(edge, ivs, values):
 def _closure(inputs, index):
     """Every slot that has to be filled in before `index` can be resolved.
 
-    An input's own `reads` is closed through the hoisted locals it reaches but
-    stops at edges, because resolving this input needs an edge in its read set
-    evaluated, not opened up. Getting that edge's value means resolving it in
-    turn, so resolution closes the rest of the way.
+    Wider than the input's own `reads`, which the compiler closes through the
+    hoisted locals it reaches and no further: an edge in a read set is there to
+    be resolved for its cell, not opened up. But filling that edge's slot in
+    means resolving it in turn, and so reading whatever *it* reads -- so this
+    walk follows edges as well, which `reads` alone does not.
     """
     reached = set()
     pending = list(inputs[index].reads)
@@ -277,14 +278,13 @@ class Graph:
         leave the cell looking as though it had fewer dependencies than it has,
         so `expand` stays the only writer.
         """
-        obj, node, *_ = key
-        compiled = node.compiled
+        compiled = key[1].compiled
         inp = compiled.inputs[index]
         if not isinstance(inp, Edge):
             # A terminal or a hoisted local is a value, never a cell.
             return ()
         ivs = self._fill_closure(key, _closure(compiled.inputs, index))
-        deps, _ = self._edge_cells(inp, obj, key, ivs, wanted=False)
+        deps, _ = self._edge_cells(inp, key, ivs, wanted=False)
         return tuple(deps)
 
     def evaluate(self, key):
@@ -314,25 +314,12 @@ class Graph:
         when evaluate_all is set, or when a later input reads it to work out
         which cell it refers to.
         """
-        obj, node, *args = key
-        compiled = node.compiled
+        compiled = key[1].compiled
         ivs: list[object] = [None] * len(compiled.inputs)
         deps = []
         for inp in compiled.inputs:
-            if isinstance(inp, Value):
-                ivs[inp.index] = args[inp.index]
-                continue
-            if isinstance(inp, Local):
-                # A hoisted intermediate: a value, never a dependency. Evaluated
-                # during expansion only if a later input's shape reads it.
-                if evaluate_all or inp.index in compiled.needed:
-                    ivs[inp.index] = inp.expr(obj, key, ivs)
-                continue
             wanted = evaluate_all or inp.index in compiled.needed
-            found, values = self._edge_cells(inp, obj, key, ivs, wanted)
-            deps.extend(found)
-            if wanted:
-                _fill(inp, ivs, values)
+            deps.extend(self._fill_slot(inp, key, ivs, wanted))
         return frozenset(deps), ivs
 
     def _fill_closure(self, key, wanted):
@@ -341,28 +328,46 @@ class Graph:
         A slot can only read slots before it, so one pass in slot order
         suffices: whatever a slot reads is already there when it is reached.
         """
-        obj, node, *args = key
-        ivs: list[object] = [None] * len(node.compiled.inputs)
-        for inp in node.compiled.inputs:
-            if inp.index not in wanted:
-                continue
-            if isinstance(inp, Value):
-                ivs[inp.index] = args[inp.index]
-            elif isinstance(inp, Local):
-                ivs[inp.index] = inp.expr(obj, key, ivs)
-            else:
-                _fill(inp, ivs, self._edge_cells(inp, obj, key, ivs, True)[1])
+        ivs: list[object] = [None] * len(key[1].compiled.inputs)
+        for inp in key[1].compiled.inputs:
+            if inp.index in wanted:
+                self._fill_slot(inp, key, ivs, True)
         return ivs
 
-    def _edge_cells(self, inp, obj, key, ivs, wanted):
+    def _fill_slot(self, inp, key, ivs, wanted):
+        """Put one input's value into its slot, and return the cells it names.
+
+        The one place that knows what each kind of input takes to produce, so
+        that expansion and resolution differ only in which slots they ask for
+        rather than each carrying its own copy of the cascade.
+        """
+        obj, _, *args = key
+        if isinstance(inp, Value):
+            # An argument's value comes free with the key, so it is always put
+            # in place: there is nothing to save by leaving it out.
+            ivs[inp.index] = args[inp.index]
+            return ()
+        if isinstance(inp, Local):
+            # A hoisted intermediate: a value, never a dependency. Evaluated
+            # during expansion only if a later input's shape reads it.
+            if wanted:
+                ivs[inp.index] = inp.expr(obj, key, ivs)
+            return ()
+        deps, values = self._edge_cells(inp, key, ivs, wanted)
+        if wanted:
+            _fill(inp, ivs, values)
+        return deps
+
+    def _edge_cells(self, edge, key, ivs, wanted):
         """The cells one edge names, and their values if `wanted`.
 
         An edge names zero or more cells: one call site for a plain call, one
         per element for a map. Resolving is always done -- that is what
         expansion is -- but the values behind it only when something asks.
         """
+        obj = key[0]
         deps, values = [], []
-        for call, target in _targets(inp, inp.resolve(obj, key, ivs)):
+        for call, target in _targets(edge, edge.resolve(obj, key, ivs)):
             if target is None:
                 # Not a node on this object after all: an ordinary call, which
                 # is a value rather than a cell.
