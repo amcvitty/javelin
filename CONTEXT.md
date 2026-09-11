@@ -35,7 +35,9 @@ The input kind that is one of the cell's own arguments — a terminal.
 
 **`Edge`**:
 The input kind reached by calling a method on an object the graph produced. How
-many cells one call site names is left to `CallEdge` and `MapEdge`.
+many cells one call site names is left to `CallEdge` and `MapEdge`. Asking one
+to `resolve` gives back call sites, not cells — turning those into cells is the
+graph's job, and is what expansion does with them.
 
 **`CallEdge`**:
 An `Edge` naming exactly one cell.
@@ -54,8 +56,18 @@ has none.
 _Avoid_: condition, predicate, filter.
 
 **expansion**:
-Working out which cells a cell depends on without running any body. What
-evaluation is not.
+Working out which cells a cell depends on, without running that cell's own
+body. Not free: an edge whose receiver or arguments are themselves cells has
+to have them evaluated before it can say which cell it names.
+
+Over every slot at once (`expand`), it records the answer in the dependency
+map and is the only thing that writes there. Over one slot (`expand_slot`), it
+evaluates only that slot's closure and records nothing — so a cell can never
+be left looking as though it had fewer dependencies than it has. The two
+agree: expanding every slot separately names the same cells as expanding the
+cell, give or take the order and duplicates a map edge keeps.
+_Avoid_: resolution, for the action — a slot *is* resolved, but expansion is
+what resolves it.
 
 **`reads`**:
 Per input: the slots that resolving *that one* input reads, closed through any
@@ -112,13 +124,6 @@ slot resolved to.
 One `ivs` slot, described: its index, its kind, its source, its guard, its
 `reads`, whether it is statically resolvable, and the cells it resolves to.
 The read-only counterpart of `Input`, which is what the runtime runs.
-
-**resolution**:
-Working out which cells *one* slot names, evaluating only that slot's own
-closure. Expansion asks the same question of every slot at once and records
-the answer; resolution asks it one slot at a time and records nothing, so a
-cell can never be left looking as though it had fewer dependencies than it
-has.
 
 **not yet resolved**:
 The third answer a slot can give about its cells, alongside some and none.

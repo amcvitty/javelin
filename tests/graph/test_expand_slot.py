@@ -1,9 +1,9 @@
-"""Resolving one input at a time.
+"""Expanding one slot at a time.
 
-Expansion is all-or-nothing: ask what a cell depends on and every edge it has
-is resolved, evaluating whatever that takes. Resolution is the other end of
-the same question -- one slot, one answer, and only that slot's own closure
-evaluated to get it.
+`expand` is all-or-nothing: ask what a cell depends on and every slot it has
+is taken at once, evaluating whatever that costs between them. `expand_slot`
+asks the same question of one slot -- one answer, and only that slot's own
+closure evaluated to get it.
 
 That is what makes the cost of looking visible. A slot whose closure reaches
 no edge is resolved for free, so a cell view fills those in without being
@@ -19,7 +19,7 @@ def make_picker(evaluated=None):
     """Two independent picks in one body: `item(i())` and `item(j())`.
 
     Each call site reads one index and nothing else, so `needed` covers both
-    while either slot's own closure covers one. Resolving one of them must
+    while either slot's own closure covers one. Expanding one of them must
     leave the other index unevaluated.
     """
 
@@ -51,44 +51,44 @@ def make_picker(evaluated=None):
     return Picker()
 
 
-class TestResolvingOneInput:
-    """One input of one cell, resolved on its own."""
+class TestExpandingOneSlot:
+    """One input of one cell, expanded on its own."""
 
     def test_an_input_resolves_to_the_cells_it_names(self):
         book, _ = make_book()
 
         cell = graph.cell(book.total.key(True))
 
-        assert cell.resolve(1) == (book.rate.key(),)
+        assert cell.expand_slot(1) == (book.rate.key(),)
 
     def test_resolved_cells_are_views_in_the_same_graph(self):
         book, _ = make_book()
 
-        (rate,) = graph.cell(book.total.key(True)).resolve(1)
+        (rate,) = graph.cell(book.total.key(True)).expand_slot(1)
 
         assert isinstance(rate, graph.Cell)
         assert rate.method_name == "rate"
 
-    def test_resolving_fills_the_slot_in(self):
+    def test_expanding_a_slot_fills_it_in(self):
         book, (one, two) = make_book()
         cell = graph.cell(book.total.key(True))
         assert cell.slots[4].cells is graph.UNRESOLVED
 
-        cell.resolve(4)
+        cell.expand_slot(4)
 
         assert cell.slots[4].cells == (one.pv.key(), two.pv.key())
 
-    def test_resolving_one_input_evaluates_only_its_own_closure(self):
+    def test_expanding_one_slot_evaluates_only_its_own_closure(self):
         evaluated = []
         picker = make_picker(evaluated)
 
         cell = graph.cell(picker.combo.key())
-        left = cell.resolve(1)
+        left = cell.expand_slot(1)
 
         assert left == (picker.item.key(1),)
         assert evaluated == ["i"]  # not j, which the other call site reads
 
-    def test_expansion_by_contrast_evaluates_everything_needed(self):
+    def test_expanding_the_whole_cell_by_contrast_evaluates_everything_needed(self):
         evaluated = []
         picker = make_picker(evaluated)
 
@@ -96,15 +96,15 @@ class TestResolvingOneInput:
 
         assert sorted(evaluated) == ["i", "j"]
 
-    def test_resolving_the_same_input_twice_costs_nothing_the_second_time(self):
+    def test_expanding_the_same_slot_twice_costs_nothing_the_second_time(self):
         evaluated = []
         picker = make_picker(evaluated)
         cell = graph.cell(picker.combo.key())
 
-        first = cell.resolve(1)
+        first = cell.expand_slot(1)
         evaluated.clear()
 
-        assert cell.resolve(1) == first
+        assert cell.expand_slot(1) == first
         assert evaluated == []
 
 
@@ -145,7 +145,7 @@ class TestStaticResolutionComesFree:
         slots = graph.cell(book.total.key(True)).slots
 
         assert slots[0].cells == ()
-        assert graph.cell(book.total.key(True)).resolve(2) == ()
+        assert graph.cell(book.total.key(True)).expand_slot(2) == ()
 
     def test_a_recursive_call_site_resolves_without_evaluation(self):
         """fib(n - 1) reads the node's own parameter, and a terminal's value
@@ -161,7 +161,7 @@ class TestStaticResolutionComesFree:
         assert evaluated == []
 
 
-class TestResolvingToNoCells:
+class TestSlotsThatResolveToNoCells:
     """Resolved to nothing is a different answer from not yet resolved."""
 
     def test_a_guard_that_blocks_its_call_site_resolves_to_no_cells(self):
@@ -177,7 +177,7 @@ class TestResolvingToNoCells:
 
         cell = graph.cell(book.total.key(True))
 
-        assert cell.resolve(4) == ()
+        assert cell.expand_slot(4) == ()
         assert cell.slots[4].cells is not graph.UNRESOLVED
 
     def test_no_cells_and_not_yet_resolved_do_not_compare_equal(self):
@@ -195,21 +195,21 @@ class TestMapEdges:
     def test_a_map_edge_resolves_to_one_cell_per_element(self):
         book, (one, two) = make_book()
 
-        cells = graph.cell(book.total.key(True)).resolve(4)
+        cells = graph.cell(book.total.key(True)).expand_slot(4)
 
         assert cells == (one.pv.key(), two.pv.key())
 
     def test_duplicates_are_kept(self):
         book, (one, two) = make_book(holdings=lambda one, two: (one, two, one))
 
-        cells = graph.cell(book.total.key(True)).resolve(4)
+        cells = graph.cell(book.total.key(True)).expand_slot(4)
 
         assert cells == (one.pv.key(), two.pv.key(), one.pv.key())
 
     def test_the_collections_own_order_is_kept(self):
         book, (one, two) = make_book(holdings=lambda one, two: (two, one))
 
-        cells = graph.cell(book.total.key(True)).resolve(4)
+        cells = graph.cell(book.total.key(True)).expand_slot(4)
 
         assert cells == (two.pv.key(), one.pv.key())
 
@@ -217,9 +217,9 @@ class TestMapEdges:
 def make_nested():
     """A pick whose index is itself a cell with a dependency of its own.
 
-    Resolving the pick has to evaluate `held`, and evaluating `held` records
-    what *it* reads -- so the shape distinguishes the dependencies resolution
-    must not write from the ones ordinary evaluation always has.
+    Expanding the pick's slot has to evaluate `held`, and evaluating `held`
+    records what *it* reads -- so the shape distinguishes the dependencies
+    `expand_slot` must not write from the ones evaluation always has.
     """
 
     class Nested:
@@ -243,40 +243,40 @@ def make_nested():
 
 
 class TestDependenciesAreLeftAlone:
-    """Full expansion stays the only writer of the dependency map."""
+    """`expand` stays the only writer of the dependency map."""
 
-    def test_resolving_one_input_records_no_dependency_for_the_cell(self):
+    def test_expanding_one_slot_records_no_dependency_for_the_cell(self):
         book, _ = make_book()
 
-        graph.cell(book.total.key(True)).resolve(4)
+        graph.cell(book.total.key(True)).expand_slot(4)
 
         # Nothing has been told that total reads positions, because nothing
         # asked total what it depends on.
         assert graph.cell(book.positions.key()).outputs == frozenset()
 
     def test_a_cell_the_closure_evaluates_records_its_own_dependencies(self):
-        """Resolution writes nothing for the cell being resolved. The cells it
+        """`expand_slot` writes nothing for the cell it is called on. The cells it
         evaluates on the way are another matter: evaluating one has always
         recorded what it reads, and a value asked for here is no different from
         one asked for anywhere else."""
         nested = make_nested()
 
-        graph.cell(nested.pick.key()).resolve(1)
+        graph.cell(nested.pick.key()).expand_slot(1)
 
         assert graph.cell(nested.base.key()).outputs == {nested.held.key()}
         assert graph.cell(nested.held.key()).outputs == frozenset()  # not pick
 
-    def test_the_cell_being_resolved_stays_out_of_the_graph(self):
+    def test_the_cell_being_expanded_stays_out_of_the_graph(self):
         nested = make_nested()
 
-        graph.cell(nested.pick.key()).resolve(1)
+        graph.cell(nested.pick.key()).expand_slot(1)
 
         assert nested.pick.key() not in graph.all_nodes()
 
-    def test_expansion_after_partial_resolution_finds_every_dependency(self):
+    def test_expanding_the_whole_cell_afterwards_finds_every_dependency(self):
         book, (one, two) = make_book()
 
-        graph.cell(book.total.key(True)).resolve(4)
+        graph.cell(book.total.key(True)).expand_slot(4)
         deps = graph.cell(book.total.key(True)).expand()
 
         assert deps == {
@@ -290,7 +290,7 @@ class TestDependenciesAreLeftAlone:
         pricer = make_pricer()()
         pricer.pv()
 
-        graph.cell(pricer.pv.key()).resolve(0)
+        graph.cell(pricer.pv.key()).expand_slot(0)
         pricer.spot.set_value(110.0)
 
         assert graph.cell(pricer.pv.key()).value.state is graph.ValueState.DIRTY

@@ -261,11 +261,11 @@ class Graph:
             self._record(key, self._run_inputs(key, evaluate_all=False)[0])
         return self._deps.inputs(key)
 
-    def resolve(self, key, index):
+    def expand_slot(self, key, index):
         """The cells one of this cell's inputs names, as keys.
 
-        `expand` resolves every edge a cell has, and evaluates whatever all of
-        them read between them. This resolves one slot, walking only that
+        `expand` takes every slot a cell has at once, and evaluates whatever
+        all of them read between them. This takes one slot, walking only that
         slot's own closure -- so a slot reaching no edge is answered without
         running a body at all, and one that does costs only its own.
 
@@ -338,8 +338,8 @@ class Graph:
         """Put one input's value into its slot, and return the cells it names.
 
         The one place that knows what each kind of input takes to produce, so
-        that expansion and resolution differ only in which slots they ask for
-        rather than each carrying its own copy of the cascade.
+        that expanding a cell and expanding one slot differ only in which slots
+        they ask for, rather than each carrying its own copy of the cascade.
         """
         obj, _, *args = key
         if isinstance(inp, Value):
@@ -362,8 +362,8 @@ class Graph:
         """The cells one edge names, and their values if `wanted`.
 
         An edge names zero or more cells: one call site for a plain call, one
-        per element for a map. Resolving is always done -- that is what
-        expansion is -- but the values behind it only when something asks.
+        per element for a map. Which cells is always worked out -- that is what
+        expansion is -- but the values behind them only when something asks.
         """
         obj = key[0]
         deps, values = [], []

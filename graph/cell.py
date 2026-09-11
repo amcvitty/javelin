@@ -15,7 +15,7 @@ reaching an *edge* costs an evaluation.
 
 That cost is what decides when a slot is filled in. A statically resolvable
 slot is resolved as the view's slots are built, since doing so is free; any
-other waits for `resolve`, reporting `UNRESOLVED` until then -- a different
+other waits for `expand_slot`, reporting `UNRESOLVED` until then -- a different
 answer from a guarded-off call site that resolves to no cells at all.
 """
 
@@ -141,7 +141,7 @@ class Cell:
     def slots(self):
         """One `Slot` per `ivs` slot, in slot order, whatever fills it.
 
-        Built on first use and kept, so that a slot resolved through this view
+        Built on first use and kept, so that a slot expanded through this view
         stays resolved in it. Statically resolvable slots are resolved as the
         slots are built, which runs no body; the rest wait to be asked for.
         """
@@ -151,25 +151,25 @@ class Cell:
             self._slots = [_slot(inp, edges) for inp in inputs]
             static = [slot.index for slot in self._slots if slot.statically_resolvable]
             for index in static:
-                self._resolve(index)
+                self._expand_slot(index)
         return tuple(self._slots)
 
-    def resolve(self, index):
+    def expand_slot(self, index):
         """The cells one of this cell's inputs names, as cells.
 
         Evaluates only what that input reads -- the cost its `blocked_by`
         warned about, and no more. Statically resolvable slots are filled in
-        already, and resolving one twice costs nothing the second time.
+        already, and expanding one twice costs nothing the second time.
         """
         cells = self.slots[index].cells
         if isinstance(cells, _Unresolved):
-            cells = self._resolve(index)
+            cells = self._expand_slot(index)
         return cells
 
-    def _resolve(self, index):
+    def _expand_slot(self, index):
         """Fill one slot in, in place of the record built without it."""
         assert self._slots is not None  # only ever called once `slots` is built
-        keys = self.graph.resolve(self.key, index)
+        keys = self.graph.expand_slot(self.key, index)
         cells = tuple(Cell(key, self.graph) for key in keys)
         self._slots[index] = replace(self._slots[index], cells=cells)
         return cells

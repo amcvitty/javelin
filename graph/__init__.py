@@ -43,7 +43,7 @@ Slots whose cells are known for free come back resolved. The rest say what is
 blocking them and wait to be asked, so the cost of looking is paid one slot at
 a time rather than all at once:
 
-    graph.cell(book.total.key(True)).resolve(4)
+    graph.cell(book.total.key(True)).expand_slot(4)
 """
 
 from .cell import UNRESOLVED, Cell, Slot
