@@ -71,23 +71,11 @@ the bodies in the order `1, 0, 2, 3, 4, 5`.
 
 ## Vocabulary
 
-| Term | Meaning |
-|---|---|
-| **node** | A method decorated with `@node`. Compiled once, when the class is created. |
-| **cell** | One *invocation* of a node on an object: `fib(5)` and `fib(4)` are different cells. |
-| **key** | How a cell is identified: the flat tuple `(object, method, *args)`. |
-| **terminal** | A constant. The node's own arguments; the key is implicitly the value. |
-| **`Value`** | An input that is one of the cell's arguments — a terminal. |
-| **`Edge`** | An input reached by calling a method on objects the graph produced. Abstract: it says how many cells one call site names. |
-| **`CallEdge`** | An `Edge` naming one cell. Carries `receiver` and `args` as compiled `(self, node, ivs)` lambdas. |
-| **`MapEdge`** | An `Edge` naming one cell *per element* of a collection — a comprehension (see "Comprehensions"). |
-| **`Local`** | An input that is a body intermediate hoisted above the body. A `(self, node, ivs)` lambda, no dependency of its own (see "Intermediate locals"). |
-| **guard** | The condition under which a call site is reached. `None` means unconditional. |
-| **`ivs`** | The input-value array a compiled body reads instead of parameters and node calls. |
-| **`needed`** | Indices whose *values* a later input reads (see below). |
-| **override** | A value set on a cell directly, shadowing its body. |
-| **dirty** | A cell whose memoised value is stale because something it depends on changed. |
-| **diddle** | A scope in which overrides are temporary, and undoing them is a restore. |
+Every term this project uses is defined in [CONTEXT.md](CONTEXT.md) — the engine
+ones (node, cell, key, `ivs`, `Edge`, guard, `reads`, `needed`, diddle, ...)
+under "Language — engine", the pricing and namespace ones under "Language —
+analytics". The rest of this README explains how the engine works and assumes
+those words; it does not redefine them.
 
 ## When an edge's shape depends on a value
 
@@ -101,10 +89,21 @@ def pick(self, n):
 
 Deciding whether `self.fib(n)` is a dependency requires knowing
 `self.threshold()`. So `threshold` must be evaluated during expansion, while
-`fib` must not be. `CompiledNode.needed` records exactly which input indices
-some later argument expression or guard reads — here `{0, 1}` — and expansion
-evaluates only those. `deps(pick, 5)` is `{threshold, fib(5)}`; `deps(pick, 1)`
-is `{threshold}`.
+`fib` must not be. Each input records the slots resolving *it* reads — the
+`self.fib(n)` edge reads `{0, 1}`, the parameter and `threshold` — and
+`CompiledNode.needed` is the union over the edges, which is what expansion
+evaluates. `deps(pick, 5)` is `{threshold, fib(5)}`; `deps(pick, 1)` is
+`{threshold}`.
+
+A read set is closed transitively through hoisted locals: reading a local's slot
+means evaluating it, which means reading whatever it reads. Edges are not
+followed — an edge in a read set is resolved for its cell, not opened up. The
+union is taken over the edges alone, so a local that nothing shape-forming
+reads stays out of `needed` and is left to evaluation.
+
+Keeping the sets per input, rather than only their union, is what lets a single
+call site be resolved on its own — its own closure is usually far smaller than
+everything `needed` covers.
 
 This is the "edges change the shape of the graph" case: computing which cell you
 depend on is itself a graph computation.
@@ -191,9 +190,9 @@ needed = {0}
 
 Resolving *which object* is the same problem as resolving an edge's arguments,
 and uses the same machinery: the receiver expression is rewritten to read `ivs`,
-and the inputs it reads go into `needed` so expansion evaluates them. Finding
-`Strike`'s dependencies runs `EquityObj` — it has to, that is what names the
-cell — but not `StockPrice`.
+and the inputs it reads go into the edge's `reads` — and so into `needed`, so
+expansion evaluates them. Finding `Strike`'s dependencies runs `EquityObj` — it
+has to, that is what names the cell — but not `StockPrice`.
 
 **Which calls become edges.** Any call whose receiver expression reads `self`.
 The receiver is resolved during expansion and then, if the attribute is a node,
@@ -293,7 +292,7 @@ whole thing running.
 
 ```
 graph/
-  ir.py         Value, Edge (CallEdge, MapEdge), Local, Call, CompiledNode
+  ir.py         Input (Value, Edge -> CallEdge/MapEdge, Local), Call, CompiledNode
   rewriter.py   Guard, GuardStack, RawEdge, RawLocal, Rewriter -- the AST transform
   compiler.py   compile_node(): source -> CompiledNode
   runtime.py    make_key(), Graph, DEFAULT -- cells, deps, values, diddles
@@ -365,8 +364,13 @@ come from `if`/`else`, ternaries, `and`/`or` short-circuits, and **early
 returns** — statements after `if n < 2: return n` are guarded by `not n < 2`.
 
 Each guard is a `Guard(original, rewritten)` pair: `original` is in terms of the
-node's parameters and is only ever shown to humans (`str(edge)`), `rewritten` is
-in terms of `ivs` and is what gets compiled.
+node's parameters and is only ever shown to humans, `rewritten` is in terms of
+`ivs` and is what gets compiled.
+
+The pair survives compilation: an `Edge` carries `guard`, the compiled
+predicate, and `guard_source`, the readable text. `str(edge)` puts the call site
+and its guard back together, so keeping them in separate fields costs nothing at
+the point of reading and lets a tool show guard status in a column of its own.
 
 `GuardStack.scope()` captures the stack depth **on entry** and truncates to it on
 exit. This matters: an earlier version removed a *count* of guards instead, so a

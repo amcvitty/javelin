@@ -10,7 +10,7 @@ import ast
 import inspect
 import textwrap
 
-from .ir import CompiledNode, Edge, Local, Value
+from .ir import CompiledNode, Input, Local, Value
 from .rewriter import Rewriter, impl_args, ivs_indices
 
 #: What the rewritten body is called inside the factory. Deliberately not the
@@ -44,18 +44,34 @@ def _split_signature(func):
     return parameters[0].name, params, signature.replace(parameters=parameters[1:])
 
 
+def _closed(slots, local_reads):
+    """`slots` widened through the hoisted locals it reaches, recursively.
+
+    Reading a local's slot means evaluating it, which means reading whatever
+    *it* reads. Edges are not followed: an edge in a read set is resolved for
+    its cell, not opened up.
+    """
+    reached = set(slots)
+    pending = list(reached)
+    while pending:
+        for dep in local_reads.get(pending.pop(), ()):
+            if dep not in reached:
+                reached.add(dep)
+                pending.append(dep)
+    return frozenset(reached)
+
+
 def _build_factory(func_def, edges, raw_locals, self_name, freevars):
     """Wrap the rewritten body, per-edge lambdas and per-local lambdas in a
     `__make` factory.
 
-    Returns the module, the number of parts each edge contributed, and the set
-    of inputs whose *values* some edge reads to work out which cell it refers
-    to -- widened to the transitive closure through any hoisted local an edge
-    reaches.
+    Returns the module, the number of parts each edge contributed, and each
+    edge's and local's read set: the slots resolving it reads, widened to the
+    transitive closure through any hoisted local it reaches.
     """
     parts: list[ast.expr] = [ast.Name(id=func_def.name, ctx=ast.Load())]
     counts = []
-    needed = set()
+    read_directly = {}  # ivs index -> the slots its own expressions read
     for edge in edges:
         # Each edge kind says which expressions it needs compiling: a receiver
         # and arguments for one cell, plus a collection for one cell per
@@ -67,21 +83,15 @@ def _build_factory(func_def, edges, raw_locals, self_name, freevars):
         # -- through the object it is called on, its arguments, or the
         # collection it maps over -- has to be evaluated during expansion, not
         # just during evaluation.
-        for part in edge_parts:
-            needed |= ivs_indices(part)
+        read_directly[edge.index] = set().union(*(ivs_indices(p) for p in edge_parts))
     for local in raw_locals:
         parts.append(ast.Lambda(args=impl_args(self_name), body=local.value))
+        read_directly[local.index] = ivs_indices(local.value)
 
-    # A hoisted local is only worth evaluating during expansion when something
-    # that shapes the graph reads it -- and then the inputs *it* reads matter
-    # too, recursively.
-    local_reads = {local.index: ivs_indices(local.value) for local in raw_locals}
-    pending = list(needed)
-    while pending:
-        for dep in local_reads.get(pending.pop(), ()):
-            if dep not in needed:
-                needed.add(dep)
-                pending.append(dep)
+    local_reads = {local.index: read_directly[local.index] for local in raw_locals}
+    reads = {
+        index: _closed(slots, local_reads) for index, slots in read_directly.items()
+    }
 
     factory = ast.FunctionDef(
         name="__make",
@@ -91,7 +101,7 @@ def _build_factory(func_def, edges, raw_locals, self_name, freevars):
     module = ast.fix_missing_locations(
         ast.Module(body=[ast.copy_location(factory, func_def)], type_ignores=[])
     )
-    return module, counts, frozenset(needed)
+    return module, counts, reads
 
 
 def _cell_contents(cell):
@@ -139,7 +149,7 @@ def compile_node(func, owner, is_node):
     # factory the body is a nested def, which would shadow a free variable of
     # the same name -- a node called `market` closing over a `market`.
     func_def.name = IMPL_NAME
-    module, counts, needed = _build_factory(
+    module, counts, reads = _build_factory(
         func_def,
         rewriter.edges,
         rewriter.raw_locals,
@@ -151,12 +161,12 @@ def compile_node(func, owner, is_node):
     # `compiled` is each edge's parts in turn -- how many is the edge kind's
     # business -- then one lambda per hoisted local, in the order the factory
     # built them.
-    inputs: list[Value | Edge | Local] = [
-        Value(index=i, name=name) for name, i in params.items()
+    inputs: list[Input] = [
+        Value(index=i, reads=frozenset(), name=name) for name, i in params.items()
     ]
     at = 0
     for edge, count in zip(rewriter.edges, counts):
-        inputs.append(edge.build(compiled[at : at + count]))
+        inputs.append(edge.build(compiled[at : at + count], reads[edge.index]))
         at += count
     local_parts = compiled[at:]
     for local, expr in zip(rewriter.raw_locals, local_parts):
@@ -166,9 +176,16 @@ def compile_node(func, owner, is_node):
                 name=local.name,
                 expr=expr,
                 source=local.source,
+                reads=reads[local.index],
             )
         )
     inputs.sort(key=lambda inp: inp.index)
+
+    # A hoisted local is only worth evaluating during expansion when something
+    # that shapes the graph reads it, so what expansion evaluates is the union
+    # over the *edges* -- a local no edge reaches stays out, however much its
+    # own read set covers.
+    needed = frozenset().union(*(reads[edge.index] for edge in rewriter.edges))
 
     return CompiledNode(
         impl=impl,

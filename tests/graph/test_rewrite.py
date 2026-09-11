@@ -346,6 +346,179 @@ class TestHoistedLocals:
         assert calc.total() == 5.0
 
 
+class TestReadSets:
+    """Each input carries the `ivs` slots resolving it reads -- its own
+    closure, which is usually far smaller than everything `needed` covers."""
+
+    def test_a_terminal_reads_nothing(self):
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
+
+        n, _, _ = graph.inputs(Calc.fib)
+        assert n.reads == frozenset()
+
+    def test_an_edge_reads_the_slots_its_arguments_and_guard_read(self):
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
+
+        _, left, right = graph.inputs(Calc.fib)
+        assert left.reads == {0}
+        assert right.reads == {0}
+
+    def test_an_edge_reads_the_slot_its_receiver_reads(self):
+        market = object()
+
+        class Option:
+            @node
+            def market(self):
+                return market
+
+            @node
+            def strike(self):
+                return self.market().spot()
+
+        receiver, spot = graph.inputs(Option.strike)
+        assert receiver.reads == frozenset()
+        assert spot.reads == {receiver.index}
+
+    def test_a_map_edge_reads_the_slot_its_collection_reads(self):
+        class Book:
+            @node
+            def positions(self):
+                return []
+
+            @node
+            def total(self):
+                return sum([p.pv() for p in self.positions()])
+
+        positions, pvs = graph.inputs(Book.total)
+        assert pvs.reads == {positions.index}
+
+    def test_a_read_set_closes_through_a_hoisted_local(self):
+        class Calc:
+            @node
+            def base(self):
+                return 10.0
+
+            @node
+            def at(self, x):
+                return x
+
+            @node
+            def chained(self):
+                half = self.base() / 2.0
+                shifted = half + 1.0
+                return self.at(shifted)
+
+        base, half, shifted, at = graph.inputs(Calc.chained)
+        assert base.reads == frozenset()
+        assert half.reads == {base.index}
+        # Not just `shifted`: the slots reached *through* it come too.
+        assert shifted.reads == {base.index, half.index}
+        assert at.reads == {base.index, half.index, shifted.index}
+
+    def test_needed_is_the_union_of_the_edges_read_sets(self):
+        class Calc:
+            @node
+            def threshold(self):
+                return 1.0
+
+            @node
+            def spot(self):
+                return 5.0
+
+            @node
+            def item(self, n):
+                return n * 10
+
+            @node
+            def pick(self):
+                limit = self.threshold() * 2.0
+                return self.item(1) if self.spot() > limit else 0.0
+
+        compiled = Calc.pick.compiled
+        assert compiled is not None  # set by __set_name__ at class creation
+        edges = [i for i in graph.inputs(Calc.pick) if isinstance(i, graph.Edge)]
+        assert compiled.needed == frozenset().union(*(e.reads for e in edges))
+
+    def test_a_local_no_edge_reaches_stays_out_of_needed(self):
+        """`needed` is the union over the *edges*. A local nothing shape-forming
+        reads is still not evaluated during expansion, whatever it reads."""
+
+        class Calc:
+            @node
+            def rate(self):
+                return 0.05
+
+            @node
+            def factor(self, n):
+                r = self.rate()
+                return 1.0 + r * n
+
+        compiled = Calc.factor.compiled
+        assert compiled is not None  # set by __set_name__ at class creation
+        _, rate, r = graph.inputs(Calc.factor)
+        assert r.reads == {rate.index}
+        assert compiled.needed == frozenset()
+
+
+class TestGuardSource:
+    """An edge's guard is a field of its own, not a suffix on its source."""
+
+    def test_a_guarded_edge_carries_its_guard_text_separately(self):
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
+
+        _, left, _ = graph.inputs(Calc.fib)
+        assert left.source == "self.fib(n - 1)"
+        assert left.guard_source == "not n < 2"
+        assert str(left) == "self.fib(n - 1) if not n < 2"
+
+    def test_an_unguarded_edge_has_no_guard_source(self):
+        Calc = make_calc()
+
+        a, b = graph.inputs(Calc.sum)
+        assert (a.guard_source, b.guard_source) == (None, None)
+        assert str(a) == a.source == "self.a()"
+
+    def test_a_guarded_map_edge_carries_its_guard_text_separately(self):
+        class Book:
+            @node
+            def positions(self):
+                return []
+
+            @node
+            def total(self, live):
+                if live:
+                    return sum([p.pv() for p in self.positions()])
+                return 0.0
+
+        _, _, pvs = graph.inputs(Book.total)
+        assert pvs.source == "[p.pv() for p in self.positions()]"
+        assert pvs.guard_source == "live"
+        assert str(pvs) == "[p.pv() for p in self.positions()] if live"
+
+    def test_the_inputs_of_a_recursive_node_are_inspectable(self):
+        """From a REPL, `graph.inputs(Calc.fib)` shows both the read sets and
+        the guard source without any further digging."""
+
+        class Calc:
+            @node
+            def fib(self, n):
+                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
+
+        _, left, _ = graph.inputs(Calc.fib)
+        printed = repr(graph.inputs(Calc.fib))
+        assert f"reads={left.reads!r}" in printed
+        assert f"guard_source={left.guard_source!r}" in printed
+
+
 class TestUnsupported:
     """Patterns that cannot be turned into a fixed list of inputs, or that
     would let a node see more than functions and constants, fail when the

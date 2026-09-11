@@ -35,7 +35,7 @@ def _targets(edge, calls):
     if edge.collects and any(t is not None for t in found) and not all(found):
         odd = next(call for (call, _), target in zip(resolved, found) if target is None)
         raise TypeError(
-            f"{edge.source}: {type(odd.receiver).__name__}.{odd.target} is not "
+            f"{edge}: {type(odd.receiver).__name__}.{odd.target} is not "
             "a node, but other elements' are; every element of a comprehension "
             "must resolve the same way"
         )
