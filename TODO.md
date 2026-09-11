@@ -19,12 +19,9 @@ below runs as written.
 
 Still open here:
 
-- `ns` lookups are not themselves graph cells, so adding an object under a name
-  a node already looked up and failed on will not dirty anything.
 - The store holds one row per object with no versioning or history.
 - `lookup_or_new` takes the class on trust: looking a stored object up with a
   different class than it was written with is not checked.
-
 
 Single objects are interesting, but limited. Real applications have multiple different objects encapsulating
 different bits of functionality.
