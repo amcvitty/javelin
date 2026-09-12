@@ -22,7 +22,7 @@ says which.
 
 from dataclasses import dataclass
 
-from graph import UNRESOLVED, InputKind, ValueState
+from graph import UNRESOLVED, Cell, InputKind, ValueState
 
 #: How much room the identity column has before it is truncated.
 IDENTITY_WIDTH = 44
@@ -148,6 +148,12 @@ class InputRow:
 
     `slot` is the slot's index, sub-indexed as `4.0`, `4.1` for the elements a
     map edge named, so an element is always visibly part of its slot.
+
+    `slot_index` and `sub_index` are not columns -- nothing displays them --
+    but they are how navigation finds its way back to the slot and, for a map
+    edge, the element this row names. `sub_index` is `None` for a row that
+    names no single element: a non-map edge, a terminal, a local, or the "N
+    more" row a capped map edge leaves behind.
     """
 
     slot: str
@@ -156,6 +162,8 @@ class InputRow:
     value: str
     guard: str
     reads: str
+    slot_index: int
+    sub_index: int | None = None
 
 
 def _reads(slot):
@@ -175,11 +183,16 @@ def _terminal_values(cell):
     return bound.arguments
 
 
-def _row(slot, identity, value, *, sub=None):
+def _row(slot, identity, value, *, sub=None, nav_sub=None):
     """One input row, with the slot index sub-indexed if this is an element.
 
     `value` arrives ready to show -- `value_text` for a cell's value, a plain
     word for a slot that has no cell to have one.
+
+    `nav_sub` is the element index navigation should use, when it differs from
+    `sub`'s display purpose -- the "N more" row is labelled with the count it
+    stands for but names no element of its own, so it leaves `nav_sub` at its
+    default of `None` rather than passing the count.
     """
     index = str(slot.index) if sub is None else f"{slot.index}.{sub}"
     return InputRow(
@@ -189,14 +202,17 @@ def _row(slot, identity, value, *, sub=None):
         value=value,
         guard=slot.guard_source or "",
         reads=_reads(slot),
+        slot_index=slot.index,
+        sub_index=nav_sub,
     )
 
 
-def _unresolved_reason(slot):
+def unresolved_reason(slot):
     """Why an edge that resolved to no cells named nothing.
 
     Distinguishing these on screen is the whole reason the engine keeps
-    "resolved to none" apart from "not yet resolved".
+    "resolved to none" apart from "not yet resolved". Shared with navigation,
+    so a row's value column and a failed drill's reason say the same thing.
     """
     if slot.kind is InputKind.MAP_EDGE:
         return "no elements"
@@ -219,7 +235,7 @@ def _edge_rows(slot, width, cap):
     if slot.cells is UNRESOLVED:
         return (_row(slot, _target_call(slot), str(UNRESOLVED)),)
     if not slot.cells:
-        return (_row(slot, _target_call(slot), _unresolved_reason(slot)),)
+        return (_row(slot, _target_call(slot), unresolved_reason(slot)),)
     if slot.kind is not InputKind.MAP_EDGE:
         cell = slot.cells[0]
         return (
@@ -232,6 +248,7 @@ def _edge_rows(slot, width, cap):
             truncate_left(cell_label(cell), width),
             value_text(cell.value),
             sub=sub,
+            nav_sub=sub,
         )
         for sub, cell in enumerate(slot.cells[:cap])
     ]
@@ -269,10 +286,16 @@ def input_rows(cell, *, width=IDENTITY_WIDTH, cap=MAP_ROW_CAP):
 
 @dataclass(frozen=True)
 class OutputRow:
-    """One cell known to read this one."""
+    """One cell known to read this one.
+
+    `target` is not a column -- nothing displays it -- but it is the cell
+    navigation drills into: an output is a cell already, with nothing to
+    resolve first.
+    """
 
     cell: str
     value: str
+    target: Cell
 
 
 def output_rows(cell, *, width=IDENTITY_WIDTH):
@@ -282,9 +305,14 @@ def output_rows(cell, *, width=IDENTITY_WIDTH):
     always be added, so "the ones known so far" is the only output list that
     could ever exist, and saying so on every screen would say nothing.
     """
+    entries = sorted(
+        (
+            (cell_label(output), value_text(output.value), output)
+            for output in cell.outputs
+        ),
+        key=lambda entry: entry[:2],
+    )
     return tuple(
-        OutputRow(cell=truncate_left(label, width), value=value)
-        for label, value in sorted(
-            (cell_label(output), value_text(output.value)) for output in cell.outputs
-        )
+        OutputRow(cell=truncate_left(label, width), value=value, target=target)
+        for label, value, target in entries
     )
