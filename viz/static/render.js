@@ -358,22 +358,35 @@
   var dragMoved = false;
   var dragStart = null;
 
+  // Re-reads the current viewport element rather than caching it, since
+  // `draw()` replaces it wholesale on every redraw (a group expanding, a
+  // fit-to-window). Shared by every place that changes `view` and needs the
+  // page to reflect it.
+  function refreshTransform() {
+    var viewport = document.getElementById("viz-viewport");
+    if (viewport) applyTransform(viewport);
+  }
+
+  // Zooms by `factor` about the point (px, py), in screen pixels -- the
+  // point under the cursor for a wheel event, the viewport's own center for
+  // a toolbar button. Keeping that point fixed on screen while `k` changes
+  // is the one piece of arithmetic both callers need.
+  function zoomAt(px, py, factor) {
+    if (view === null) return;
+    var newK = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, view.k * factor));
+    view.x = px - ((px - view.x) * newK) / view.k;
+    view.y = py - ((py - view.y) * newK) / view.k;
+    view.k = newK;
+    refreshTransform();
+  }
+
   svg.addEventListener(
     "wheel",
     function (e) {
       if (view === null) return;
       e.preventDefault();
       var rect = svg.getBoundingClientRect();
-      var mx = e.clientX - rect.left;
-      var my = e.clientY - rect.top;
-      var factor = Math.exp(-e.deltaY * 0.001);
-      var newK = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, view.k * factor));
-      // Keeps the point under the cursor fixed on screen while it scales.
-      view.x = mx - ((mx - view.x) * newK) / view.k;
-      view.y = my - ((my - view.y) * newK) / view.k;
-      view.k = newK;
-      var viewport = document.getElementById("viz-viewport");
-      if (viewport) applyTransform(viewport);
+      zoomAt(e.clientX - rect.left, e.clientY - rect.top, Math.exp(-e.deltaY * 0.001));
     },
     { passive: false }
   );
@@ -393,8 +406,7 @@
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
     view.x = dragStart.vx + dx;
     view.y = dragStart.vy + dy;
-    var viewport = document.getElementById("viz-viewport");
-    if (viewport) applyTransform(viewport);
+    refreshTransform();
   });
 
   window.addEventListener("mouseup", function () {
@@ -409,14 +421,8 @@
   });
 
   function zoomBy(factor) {
-    if (view === null) return;
     var size = viewportSize();
-    var newK = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, view.k * factor));
-    view.x = size.width / 2 - ((size.width / 2 - view.x) * newK) / view.k;
-    view.y = size.height / 2 - ((size.height / 2 - view.y) * newK) / view.k;
-    view.k = newK;
-    var viewport = document.getElementById("viz-viewport");
-    if (viewport) applyTransform(viewport);
+    zoomAt(size.width / 2, size.height / 2, factor);
   }
 
   function addToolbarButton(label, title, onClick) {
