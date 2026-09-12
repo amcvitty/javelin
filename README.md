@@ -299,6 +299,35 @@ See [CONTEXT.md](CONTEXT.md) and
 the object naming scheme, and [example_pricer.py](example_pricer.py) for the
 whole thing running.
 
+## Looking at a cell: the browser
+
+Everything the engine knows about one cell can be put on screen without
+running any of it:
+
+```python
+from browser import show_node
+
+show_node(book.pv, True)
+```
+
+A header card says what the cell is and what it is currently worth, a table
+lists every `ivs` slot -- its kind, the cell it names, that cell's value, the
+guard it sits under and the slots resolving it reads -- and a second table
+lists the cells known to read it. A slot nothing has looked at says `not yet
+resolved` rather than guessing, which is a different answer from a call site
+its guard blocks; a map edge fans out to a row per element once resolved.
+
+The terminal library is an optional extra, so installing the engine still
+acquires nothing:
+
+```
+uv sync --extra tui
+python -m browser          # the demo in example_browser.py
+```
+
+`browser` imports `graph`; `graph` never imports `browser`, and its own tests
+pass in an install without the extra.
+
 ## Layout
 
 ```
@@ -321,10 +350,16 @@ analytics/
   market.py        Market, DiscountCurve, PricingEnv -- the /mkt objects
   instrument.py    EuropeanOption -- the /inst objects
   __init__.py      public API
+
+browser/
+  render.py     what a cell looks like, as plain data -- no terminal import
+  app.py        the terminal application: the only module importing textual
+  __main__.py   python -m browser: the demo at example_browser.py
+  __init__.py   show_node()
 ```
 
 `analytics` depends on `ns`, `ns` depends on `graph`; imports never run the
-other way.
+other way. `browser` sits outside that stack and depends on `graph` alone.
 
 Imports run one way, `compiler -> ir <- runtime`, with `node` on top:
 
@@ -524,6 +559,9 @@ tests/ns/        test_namespace, test_store
 tests/analytics/ test_blackscholes (the pure maths), test_market and
                  test_instrument (the /mkt and /inst objects),
                  test_greeks_by_diddle (the recompute-set artefact)
+tests/browser/   test_render (what is shown, without a terminal), test_app
+                 (the application, driven headless), test_packaging (the
+                 extra stays optional)
 ```
 
 Shared class factories are in `tests/helpers.py`; each test builds its own

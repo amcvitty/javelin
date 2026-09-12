@@ -212,6 +212,22 @@ class TestSlots:
 
         assert (slots[0].guard_source, slots[2].guard_source) == (None, None)
 
+    def test_an_edge_reports_the_method_it_calls(self):
+        """What an unresolved slot can be named by: there is no cell to name it
+        after yet, and a map edge's own source is a whole comprehension."""
+        book, _ = make_book()
+
+        slots = graph.cell(book.total.key(True)).slots
+
+        assert slots[4].target == "pv"
+
+    def test_a_slot_that_is_not_an_edge_calls_nothing(self):
+        book, _ = make_book()
+
+        slots = graph.cell(book.total.key(True)).slots
+
+        assert (slots[0].target, slots[2].target) == (None, None)
+
     def test_each_slot_reports_its_read_set(self):
         book, _ = make_book()
 

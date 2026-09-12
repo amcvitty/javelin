@@ -37,6 +37,11 @@ class Slot:
     assignment, an edge's call site -- with the guard kept apart in
     `guard_source` so either can be shown on its own.
 
+    `target` is the method an edge calls, and `None` for an input that calls
+    nothing. It is what an unresolved slot can be named by: until the edge is
+    resolved there is no cell to name it after, and a call site's own text may
+    be a whole comprehension.
+
     `blocked_by` is the edges in `reads`: the slots that have to be evaluated
     before this one's cells can be named. Empty means statically resolvable.
 
@@ -50,6 +55,7 @@ class Slot:
     guard_source: str | None
     reads: frozenset
     blocked_by: frozenset
+    target: str | None = None
     cells: tuple | _Unresolved = UNRESOLVED
 
     @property
@@ -76,6 +82,7 @@ def _slot(inp: Input, blocked_by: frozenset, cells):
         guard_source=inp.guard_source if edge else None,
         reads=inp.reads,
         blocked_by=blocked_by,
+        target=inp.target if edge else None,
         cells=cells,
     )
 

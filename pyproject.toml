@@ -11,6 +11,11 @@ dependencies = [
     "ty>=0.0.78",
 ]
 
+[project.optional-dependencies]
+tui = [
+    "textual>=1.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest-cov>=7.1.0",
