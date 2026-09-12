@@ -8,7 +8,6 @@ namespace, and a book of positions large enough to overflow the table's cap.
 Run it directly, or `python -m tui.graph_browser`, which shows the same cell.
 """
 
-import graph
 import ns
 from analytics.book import Book, Position
 from analytics.instrument import EuropeanOption
@@ -88,20 +87,14 @@ def build():
 def main():
     """Open the browser on the real book's `pv`.
 
-    Dirties the shared ACME market's spot after the first look, so the second
-    shows the book's positions gone stale together, then opens once more
-    inside a `diddle` scope so overridden values are visible while it is open
-    and restored once it exits.
+    One session, not several: `build()` already leaves a dirty cell in the
+    graph (the widget leg, outside the book) alongside the clean, computed
+    `pv`, so both value states are on screen to browse to without reopening.
+    Dirtying-in-front-of-the-reader and diddle scopes are exercised in
+    `tests/tui/graph_browser/test_pricing_demo.py`, not here -- a demo a human
+    has to quit out of four times to close is worse than one that shows less.
     """
     book = build()
-    show_node(book.pv)
-
-    ns.DEFAULT["/mkt/EQ/ACME/Market"].spot.set_value(110.0)
-    show_node(book.pv)
-
-    market = ns.DEFAULT["/mkt/EQ/ACME/Market"]
-    with graph.diddle((market.spot, 150.0)):
-        show_node(book.pv)
     show_node(book.pv)
 
 
