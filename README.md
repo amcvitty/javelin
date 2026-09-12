@@ -22,11 +22,11 @@
 | ns/store.py                        |       54 |        2 |       12 |        1 |     95% |   63, 107 |
 | tui/\_\_init\_\_.py                |        0 |        0 |        0 |        0 |    100% |           |
 | tui/graph\_browser/\_\_init\_\_.py |       11 |        4 |        2 |        1 |     62% |41-42, 47-49 |
-| tui/graph\_browser/\_\_main\_\_.py |        2 |        2 |        0 |        0 |      0% |      8-10 |
+| tui/graph\_browser/\_\_main\_\_.py |        2 |        2 |        0 |        0 |      0% |      9-11 |
 | tui/graph\_browser/app.py          |      165 |       12 |       34 |        7 |     88% |120, 206-207, 210-\>exit, 216, 232-\>234, 235-242, 273, 279, 281 |
 | tui/graph\_browser/navigation.py   |       62 |        2 |       18 |        2 |     95% |  127, 132 |
-| tui/graph\_browser/render.py       |       85 |        0 |       26 |        0 |    100% |           |
-| **TOTAL**                          | **1531** |   **74** |  **362** |   **27** | **94%** |           |
+| tui/graph\_browser/render.py       |       88 |        0 |       26 |        0 |    100% |           |
+| **TOTAL**                          | **1534** |   **74** |  **362** |   **27** | **94%** |           |
 
 
 ## Setup coverage badge
