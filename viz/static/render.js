@@ -11,6 +11,15 @@
   var svg = document.getElementById("viz-graph");
   var NS = "http://www.w3.org/2000/svg";
 
+  // Box sizing, in pixels -- named the way tui/graph_browser/render.py names
+  // its own display constants (IDENTITY_WIDTH, VALUE_WIDTH, MAP_ROW_CAP).
+  var BOX_MIN_WIDTH = 120;
+  var BOX_MAX_WIDTH = 340;
+  var CHAR_WIDTH = 7;
+  var BOX_PADDING = 24;
+  var LINE_HEIGHT = 16;
+  var BOX_TOP_PADDING = 22;
+
   function isVisible(ownerGroup) {
     return ownerGroup === null || revealed.has(ownerGroup);
   }
@@ -36,9 +45,19 @@
     var longest = lines.reduce(function (max, line) {
       return Math.max(max, line.length);
     }, 0);
-    var width = Math.max(120, Math.min(340, longest * 7 + 24));
-    var height = 22 + lines.length * 16;
+    var width = Math.max(BOX_MIN_WIDTH, Math.min(BOX_MAX_WIDTH, longest * CHAR_WIDTH + BOX_PADDING));
+    var height = BOX_TOP_PADDING + lines.length * LINE_HEIGHT;
     return { width: width, height: height };
+  }
+
+  // Why an edge named no cells: a map over nothing names none whether or not
+  // it is guarded, the same distinction tui/graph_browser/render.py's
+  // unresolved_reason keeps apart -- a guard blocking a call site is a real
+  // conditional dependency that isn't live, an empty collection never had one.
+  function guardedOffLines(edge) {
+    if (edge.guard) return ["guarded off", "if " + edge.guard];
+    if (edge.kind === "map edge") return ["no elements"];
+    return ["not reached"];
   }
 
   // Builds a dagre graph of exactly what is visible right now -- a plain
@@ -86,22 +105,24 @@
     });
 
     var drawEdges = [];
+    function addEdge(v, w, edgeData, name) {
+      g.setEdge(v, w, { edge: edgeData }, name);
+      drawEdges.push({ v: v, w: w, edge: edgeData });
+    }
+
     var stubs = 0;
     data.edges.forEach(function (edge, index) {
       if (!visibleNodes[edge.from_]) return;
       if (edge.to_type === "guarded_off") {
         var stubId = "stub" + stubs++;
-        var lines = ["guarded off"].concat(edge.guard ? ["if " + edge.guard] : []);
+        var lines = guardedOffLines(edge);
         var size = measure(lines);
         g.setNode(stubId, { width: size.width, height: size.height, kind: "stub", lines: lines });
-        g.setEdge(edge.from_, stubId, { edge: edge }, "e" + index);
-        drawEdges.push({ v: edge.from_, w: stubId, edge: edge });
+        addEdge(edge.from_, stubId, edge, "e" + index);
       } else if (edge.to_type === "group" && visibleGroups[edge.to_id]) {
-        g.setEdge(edge.from_, edge.to_id, { edge: edge }, "e" + index);
-        drawEdges.push({ v: edge.from_, w: edge.to_id, edge: edge });
+        addEdge(edge.from_, edge.to_id, edge, "e" + index);
       } else if (edge.to_type === "cell" && visibleNodes[edge.to_id]) {
-        g.setEdge(edge.from_, edge.to_id, { edge: edge }, "e" + index);
-        drawEdges.push({ v: edge.from_, w: edge.to_id, edge: edge });
+        addEdge(edge.from_, edge.to_id, edge, "e" + index);
       }
     });
 
@@ -113,8 +134,7 @@
       if (!group) return;
       group.members.forEach(function (memberId, memberIndex) {
         if (!visibleNodes[memberId]) return;
-        g.setEdge(groupId, memberId, { edge: { kind: "map edge" } }, "m" + groupId + "-" + memberIndex);
-        drawEdges.push({ v: groupId, w: memberId, edge: { kind: "map edge" } });
+        addEdge(groupId, memberId, { kind: "map edge" }, "m" + groupId + "-" + memberIndex);
       });
     });
 
