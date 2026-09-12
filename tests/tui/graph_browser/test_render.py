@@ -271,6 +271,43 @@ class TestInputTable:
         assert all(part.strip().isdigit() for part in map_row.reads.split(","))
 
 
+class TestSameObjectIdentity:
+    """A row naming a cell on the object already on screen says `self`, not
+    its path -- the path is what a reader is already looking at."""
+
+    def test_a_same_object_edge_is_named_self(self, book):
+        cell = graph.cell(book.pv.key(True))
+        index = next(slot.index for slot in cell.slots if slot.target == "hedge")
+
+        cell.expand_slot(index)
+
+        row = rows_by_slot(cell)[str(index)]
+        assert row.identity == "self.hedge()"
+
+    def test_a_cross_object_edge_still_shows_the_full_path(self, book):
+        """The map edge's legs are on a different object -- the one case this
+        rule must not touch, or two objects would look like one."""
+        cell = graph.cell(book.pv.key(True))
+        index = next(slot.index for slot in cell.slots if str(slot.kind) == "map edge")
+
+        cell.expand_slot(index)
+
+        rows = [
+            row for row in render.input_rows(cell) if row.slot.startswith(f"{index}.")
+        ]
+        assert rows[0].identity.endswith("ACME-C1.pv()")
+        assert not rows[0].identity.startswith("self.")
+
+    def test_an_output_on_the_same_object_is_named_self(self, book):
+        cell = graph.cell(book.pv.key(True))
+        index = next(slot.index for slot in cell.slots if slot.target == "hedge")
+        cell.expand_slot(index)  # book.pv reads book.hedge, once resolved
+
+        outputs = render.output_rows(graph.cell(book.hedge.key()))
+
+        assert any(row.cell == "self.pv(True)" for row in outputs)
+
+
 class TestResolution:
     """An unresolved slot says the call it would make; a resolved one says
     which cell it named."""

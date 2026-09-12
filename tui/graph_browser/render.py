@@ -93,14 +93,21 @@ def arguments(cell):
     return ", ".join(repr(arg) for arg in cell.args)
 
 
-def cell_label(cell):
+def cell_label(cell, *, relative_to=None):
     """One cell, in this repo's own vocabulary: object, method and arguments.
 
     Not `Cell.__str__`, which names the class. On screen the object is the
     interesting half -- two positions of the same class are the same string
     otherwise.
+
+    `relative_to` is the object of the cell currently on screen. A row naming
+    a cell on that same object is named `self.method(...)` rather than
+    repeating the path a reader is already looking at -- the identity column
+    only has to earn its width when the receiver is somewhere else.
     """
-    return f"{object_name(cell.obj)}.{cell.method_name}({arguments(cell)})"
+    same_object = relative_to is not None and cell.obj is relative_to
+    receiver = "self" if same_object else object_name(cell.obj)
+    return f"{receiver}.{cell.method_name}({arguments(cell)})"
 
 
 def value_text(cell_value, width=VALUE_WIDTH):
@@ -230,7 +237,7 @@ def _target_call(slot):
     return f"{slot.target}()"
 
 
-def _edge_rows(slot, width, cap):
+def _edge_rows(slot, width, cap, relative_to):
     """The rows one edge contributes: unresolved, empty, one cell, or many."""
     if slot.cells is UNRESOLVED:
         return (_row(slot, _target_call(slot), str(UNRESOLVED)),)
@@ -238,14 +245,13 @@ def _edge_rows(slot, width, cap):
         return (_row(slot, _target_call(slot), unresolved_reason(slot)),)
     if slot.kind is not InputKind.MAP_EDGE:
         cell = slot.cells[0]
-        return (
-            _row(slot, truncate_left(cell_label(cell), width), value_text(cell.value)),
-        )
+        label = cell_label(cell, relative_to=relative_to)
+        return (_row(slot, truncate_left(label, width), value_text(cell.value)),)
 
     rows = [
         _row(
             slot,
-            truncate_left(cell_label(cell), width),
+            truncate_left(cell_label(cell, relative_to=relative_to), width),
             value_text(cell.value),
             sub=sub,
             nav_sub=sub,
@@ -280,7 +286,7 @@ def input_rows(cell, *, width=IDENTITY_WIDTH, cap=MAP_ROW_CAP):
             # this is the one identity that keeps its head.
             rows.append(_row(slot, truncate_right(slot.source, width), ""))
         else:
-            rows.extend(_edge_rows(slot, width, cap))
+            rows.extend(_edge_rows(slot, width, cap, cell.obj))
     return tuple(rows)
 
 
@@ -307,7 +313,7 @@ def output_rows(cell, *, width=IDENTITY_WIDTH):
     """
     entries = sorted(
         (
-            (cell_label(output), value_text(output.value), output)
+            (cell_label(output, relative_to=cell.obj), value_text(output.value), output)
             for output in cell.outputs
         ),
         key=lambda entry: entry[:2],

@@ -87,6 +87,21 @@ class TestCrossObjectEdges:
         assert nav.focus == market.spot.key()
 
 
+class TestSameObjectIdentity:
+    """`pv()` calls `d1()` and `d2()` on itself -- the option is already the
+    object on screen, so the row says `self.d1()`, not the option's path."""
+
+    def test_a_same_object_call_edge_is_named_self(self):
+        _, option = make_option()
+        cell = graph.cell(option.pv.key())
+        index = next(slot.index for slot in cell.slots if slot.target == "d1")
+
+        cell.expand_slot(index)
+
+        row = rows_by_slot(cell)[str(index)]
+        assert row.identity == "self.d1()"
+
+
 class TestHoistedLocal:
     """`tenor` is a derived intermediate hoisted above `pv`'s body, feeding
     `discount_factor`'s argument."""
