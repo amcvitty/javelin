@@ -76,7 +76,7 @@ def to_html(graph_data: GraphData) -> str:
 <svg id="viz-graph"></svg>
 <script id="graph-data" type="application/json">{payload}</script>
 <script>
-{_read_static("vendor", "dagre.core.min.js")}
+{_read_static("vendor", "dagre.min.js")}
 </script>
 <script>
 {_read_static("render.js")}

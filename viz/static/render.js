@@ -107,7 +107,10 @@
     var drawEdges = [];
     function addEdge(v, w, edgeData, name) {
       g.setEdge(v, w, { edge: edgeData }, name);
-      drawEdges.push({ v: v, w: w, edge: edgeData });
+      // `name` travels with the record: this is a multigraph (a MapEdge can
+      // send several members between the same two nodes), so g.edge() needs
+      // it back to find the right one rather than the first one stored.
+      drawEdges.push({ v: v, w: w, name: name, edge: edgeData });
     }
 
     var stubs = 0;
@@ -211,7 +214,7 @@
       maxY = Math.max(maxY, box.y + box.height / 2);
     });
     layout.drawEdges.forEach(function (item) {
-      var edgeLayout = g.edge(item);
+      var edgeLayout = g.edge(item.v, item.w, item.name);
       drawEdge(edgeLayout.points, item.edge);
     });
     svg.setAttribute("viewBox", "0 0 " + (maxX + 24) + " " + (maxY + 24));

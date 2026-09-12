@@ -1,7 +1,11 @@
-dagre.core.min.js is vendored verbatim from dagre v0.8.5's dist/dagre.core.min.js
-(https://github.com/dagrejs/dagre), the layout-only bundle (its `lodash` and
-`graphlib` dependencies are bundled inside it; it has no DOM or rendering code
-of its own). Fetched from https://registry.npmjs.org/dagre/-/dagre-0.8.5.tgz.
+dagre.min.js is vendored verbatim from dagre v0.8.5's dist/dagre.min.js
+(https://github.com/dagrejs/dagre), the full self-contained bundle: its
+`lodash` and `graphlib` dependencies are compiled in, so `dagre.graphlib.Graph`
+is available with no other script loaded first. It has no DOM or rendering
+code of its own -- only layout. (`dist/dagre.core.min.js` is *not* used here:
+despite the name, it omits `graphlib` and expects it as a separately-loaded
+global, which this project has no other reason to carry.) Fetched from
+https://registry.npmjs.org/dagre/-/dagre-0.8.5.tgz.
 
 Copyright (c) 2012-2014 Chris Pettitt
 
