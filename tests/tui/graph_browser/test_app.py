@@ -24,7 +24,7 @@ from textual.widgets import DataTable, TextArea
 
 from tui.graph_browser import show_node
 from tui.graph_browser.app import Card, CellBrowser, TracebackScreen
-from tui.graph_browser.render import SOURCE_UNAVAILABLE
+from tui.graph_browser.render import SOURCE_UNAVAILABLE, compiled_source
 
 
 @pytest.fixture
@@ -138,7 +138,7 @@ class TestSourcePanes:
             assert "def pv(self, hedged):" in original.text
             assert compiled.language == "python"
             assert compiled.read_only is True
-            assert compiled.text == graph.code(cell.node)
+            assert compiled.text == compiled_source(cell)
 
         drive(CellBrowser(cell), check)
 
@@ -160,7 +160,9 @@ class TestSourcePanes:
 
         def check(app):
             assert "def rate(self):" in app.query_one("#original", TextArea).text
-            assert app.query_one("#compiled", TextArea).text == graph.code(book.rate)
+            assert app.query_one("#compiled", TextArea).text == compiled_source(
+                graph.cell(book.rate.key())
+            )
 
         press(CellBrowser(cell), ["enter"], row=1, check=check)  # rate(): one cell
 
@@ -169,8 +171,9 @@ class TestSourcePanes:
         cell = graph.cell(book.total.key(True))
 
         def check(app):
-            assert "def total(self, live):" in app.query_one("#original", TextArea).text
-            assert app.query_one("#compiled", TextArea).text == graph.code(book.total)
+            original = app.query_one("#original", TextArea).text
+            assert "def total(self, live):" in original
+            assert app.query_one("#compiled", TextArea).text == compiled_source(cell)
 
         press(CellBrowser(cell), ["enter", "backspace"], row=1, check=check)
 

@@ -161,9 +161,21 @@ def original_source(cell):
 
 
 def compiled_source(cell):
-    """The node's rewritten source, or the placeholder when it can't be read."""
+    """The rewritten body, followed by what fills each `ivs` slot.
+
+    The placeholder when the body itself can't be read; the legend is
+    skipped for a node with no slots rather than trailing on empty.
+    """
     text = graph.code(cell.node)
-    return SOURCE_UNAVAILABLE if text is None else text
+    if text is None:
+        return SOURCE_UNAVAILABLE
+    legend = _ivs_legend(cell)
+    return text if not legend else f"{text}\n\n{legend}"
+
+
+def _ivs_legend(cell):
+    """One line per `ivs` slot, in slot order: what fills it, as written."""
+    return "\n".join(f"ivs[{slot.index}] = {slot}" for slot in cell.slots)
 
 
 @dataclass(frozen=True)

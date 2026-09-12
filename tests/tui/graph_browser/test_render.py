@@ -443,10 +443,33 @@ class TestSourcePanes:
 
         cell = graph.cell(Fib().fib.key(5))
 
-        assert render.compiled_source(cell) == graph.code(Fib.fib)
-        assert "ivs[0] if ivs[0] < 2 else ivs[1] + ivs[2]" in render.compiled_source(
-            cell
+        text = render.compiled_source(cell)
+
+        assert text.startswith(graph.code(Fib.fib))
+        assert "ivs[0] if ivs[0] < 2 else ivs[1] + ivs[2]" in text
+
+    def test_compiled_source_lists_what_fills_each_ivs_slot(self):
+        Fib = make_fib()
+
+        cell = graph.cell(Fib().fib.key(5))
+
+        assert render.compiled_source(cell).endswith(
+            "\n\n"
+            "ivs[0] = n\n"
+            "ivs[1] = self.fib(n - 1) if not n < 2\n"
+            "ivs[2] = self.fib(n - 2) if not n < 2"
         )
+
+    def test_the_legend_is_skipped_for_a_node_with_no_slots(self):
+        class Sheet:
+            @node
+            def a(self):
+                return 1
+
+        cell = graph.cell(Sheet().a.key())
+
+        assert render.compiled_source(cell) == graph.code(Sheet.a)
+        assert "ivs[" not in render.compiled_source(cell)
 
     def test_original_source_shows_the_placeholder_when_unavailable(self):
         Dynamic = make_dynamic_node()

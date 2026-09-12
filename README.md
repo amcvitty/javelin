@@ -324,8 +324,9 @@ its guard blocks; a map edge fans out to a row per element once resolved.
 Below the tables, two read-only, Python-highlighted panes show the node's
 source -- `graph.source(cell.node)` as written and `graph.code(cell.node)` as
 compiled -- side by side, always both, refreshed on every drill and back
-navigation. Either pane shows "Source unavailable" instead of going blank
-when its accessor returns `None`.
+navigation. The compiled pane is followed by the same `ivs` legend as the
+worked example above, one line per slot in slot order. Either pane shows
+"Source unavailable" instead of going blank when its accessor returns `None`.
 
 The terminal library is an optional extra, so installing the engine still
 acquires nothing:
