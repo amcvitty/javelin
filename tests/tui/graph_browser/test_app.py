@@ -16,14 +16,14 @@ import graph
 import ns
 from graph import node
 from ns import McObject
-from tests.helpers import make_book
+from tests.helpers import make_book, make_raising
 
 pytest.importorskip("textual", reason="the tui extra is not installed")
 
 from textual.widgets import DataTable
 
 from tui.graph_browser import show_node
-from tui.graph_browser.app import CellBrowser
+from tui.graph_browser.app import Card, CellBrowser, TracebackScreen
 
 
 @pytest.fixture
@@ -237,3 +237,133 @@ class TestKeyBindingsReachNavigation:
         rate_cell = graph.cell(book.rate.key())
         assert seen["row_count"] == len(rate_cell.slots)
         assert seen["sub_title"] == str(rate_cell)
+
+
+class TestAThrowingCellDoesNotEjectYouFromTheBrowser:
+    """A raising body, guard, or receiver is reported, not unwound into."""
+
+    def test_evaluating_the_focus_reports_the_error_without_crashing(self):
+        Boom, _, _ = make_raising()
+        cell = graph.cell(Boom().broken.key())
+
+        app = press(CellBrowser(cell), ["E"])
+
+        assert app.nav.focus == cell
+        assert app.nav.depth == 0
+        assert cell.value.state is graph.ValueState.UNCOMPUTED
+        assert app._traceback is not None
+        assert "ValueError: boom" in app._traceback
+
+    def test_the_status_bar_names_the_exception_type_and_message(self):
+        Boom, _, _ = make_raising()
+        cell = graph.cell(Boom().broken.key())
+
+        app = press(CellBrowser(cell), ["E"])
+
+        messages = [notification.message for notification in app._notifications]
+        assert "ValueError: boom" in messages
+
+    def test_the_header_card_is_marked_and_stays_marked(self):
+        Boom, _, _ = make_raising()
+        cell = graph.cell(Boom().broken.key())
+        seen = {}
+
+        def check(app):
+            seen["errored"] = app.query_one(Card).errored
+
+        press(CellBrowser(cell), ["E"], check=check)
+
+        assert seen["errored"] is True
+
+    def test_a_key_shows_the_full_traceback(self):
+        Boom, _, _ = make_raising()
+        cell = graph.cell(Boom().broken.key())
+        seen = {}
+
+        def check(app):
+            seen["screen"] = app.screen
+
+        press(CellBrowser(cell), ["E", "t"], check=check)
+
+        assert isinstance(seen["screen"], TracebackScreen)
+        assert "ValueError: boom" in seen["screen"]._text
+
+    def test_pressing_the_traceback_key_before_any_error_does_not_crash(self):
+        Boom, _, _ = make_raising()
+        cell = graph.cell(Boom().broken.key())
+
+        app = press(CellBrowser(cell), ["t"])
+
+        assert app.nav.focus == cell
+
+    def test_a_raising_guard_is_caught_during_resolution(self):
+        """Not just a raising body -- a guard evaluated while resolving is
+        covered the same way."""
+        _, _, Guarded = make_raising()
+        cell = graph.cell(Guarded().maybe.key())
+
+        app = press(CellBrowser(cell), ["r"], row=1)  # dep(), guarded by check()
+
+        assert app.nav.focus == cell
+        assert app.nav.depth == 0
+        assert app._traceback is not None
+        assert "RuntimeError: guard boom" in app._traceback
+
+    def test_a_rejected_comprehension_is_caught_during_resolution(self):
+        """A map edge naming cells for some elements and plain values for
+        others is rejected by the engine itself -- also caught, not unwound
+        into."""
+        _, Bad, _ = make_raising()
+        cell = graph.cell(Bad().total.key())
+
+        app = press(CellBrowser(cell), ["r"], row=1)  # the map edge over pv()
+
+        assert app.nav.focus == cell
+        assert app.nav.depth == 0
+        assert app._traceback is not None
+        assert "is not a node" in app._traceback
+
+    def test_the_raising_row_is_marked_in_the_input_table(self):
+        _, _, Guarded = make_raising()
+        cell = graph.cell(Guarded().maybe.key())
+        seen = {}
+
+        def check(app):
+            table = app.query_one("#inputs", DataTable)
+            seen["value"] = table.get_cell_at((1, 3))  # slot 1's value column
+
+        press(CellBrowser(cell), ["r"], row=1, check=check)
+
+        assert "⚠" in str(seen["value"])
+
+    def test_the_mark_survives_a_later_action_that_still_does_not_fix_it(self):
+        """An `ActionResult` that comes back `ok=False` without raising --
+        the row is still unresolved, say -- has not fixed anything, so it
+        must not silently clear a mark an earlier exception left behind."""
+        _, _, Guarded = make_raising()
+        cell = graph.cell(Guarded().maybe.key())
+        seen = {}
+
+        def check(app):
+            table = app.query_one("#inputs", DataTable)
+            seen["value"] = table.get_cell_at((1, 3))  # slot 1's value column
+
+        # "r" raises (the guard); "e" on the still-unresolved row fails with
+        # an ActionResult rather than raising, and must not clear the mark.
+        press(CellBrowser(cell), ["r", "e"], row=1, check=check)
+
+        assert "⚠" in str(seen["value"])
+
+    def test_navigation_still_works_after_an_error(self):
+        """A row raising during resolution does not stop other rows of the
+        same cell from being navigated normally afterwards."""
+        _, _, Guarded = make_raising()
+        guarded = Guarded()
+        cell = graph.cell(guarded.maybe.key())
+
+        app = press(
+            CellBrowser(cell), ["r", "up", "enter"], row=1
+        )  # raise on row 1, then drill row 0
+
+        assert app.nav.depth == 1
+        assert app.nav.focus == guarded.check.key()

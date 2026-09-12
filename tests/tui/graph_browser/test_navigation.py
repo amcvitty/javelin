@@ -5,8 +5,10 @@ key is only ever a call to one of `Navigation`'s methods, and that is what is
 tested here. What the terminal does with the result belongs to `test_app.py`.
 """
 
+import pytest
+
 import graph
-from tests.helpers import make_book, make_chooser
+from tests.helpers import make_book, make_chooser, make_raising
 from tui.graph_browser.navigation import Navigation
 
 
@@ -250,6 +252,22 @@ class TestEvaluating:
 
         assert result.ok
         assert graph.cell(one.pv.key()).value.state is graph.ValueState.CLEAN
+
+    def test_evaluating_a_raising_body_raises_rather_than_swallowing_it(self):
+        """Navigation stays plain state: catching an exception and marking a
+        row is the browser's job, tested against `CellBrowser`, not this."""
+        Boom, _, _ = make_raising()
+        nav = Navigation(graph.cell(Boom().broken.key()))
+
+        with pytest.raises(ValueError, match="boom"):
+            nav.evaluate_focus()
+
+    def test_resolving_a_raising_guard_raises(self):
+        _, _, Guarded = make_raising()
+        nav = Navigation(graph.cell(Guarded().maybe.key()))
+
+        with pytest.raises(RuntimeError, match="guard boom"):
+            nav.resolve_slot(1)  # dep(), guarded by the raising check()
 
     def test_evaluating_an_output_fills_in_its_value(self):
         book, _ = make_book()
