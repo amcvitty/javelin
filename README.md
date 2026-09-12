@@ -23,9 +23,10 @@
 | tui/\_\_init\_\_.py                |        0 |        0 |        0 |        0 |    100% |           |
 | tui/graph\_browser/\_\_init\_\_.py |       11 |        4 |        2 |        1 |     62% |41-42, 47-49 |
 | tui/graph\_browser/\_\_main\_\_.py |        2 |        2 |        0 |        0 |      0% |      8-10 |
-| tui/graph\_browser/app.py          |       38 |        0 |        2 |        0 |    100% |           |
-| tui/graph\_browser/render.py       |       83 |        0 |       26 |        0 |    100% |           |
-| **TOTAL**                          | **1327** |   **59** |  **308** |   **18** | **95%** |           |
+| tui/graph\_browser/app.py          |      108 |       11 |       18 |        6 |     85% |125-126, 132, 143-146, 162, 168, 170, 178 |
+| tui/graph\_browser/navigation.py   |       62 |        2 |       18 |        2 |     95% |  127, 132 |
+| tui/graph\_browser/render.py       |       85 |        0 |       26 |        0 |    100% |           |
+| **TOTAL**                          | **1461** |   **72** |  **342** |   **26** | **94%** |           |
 
 
 ## Setup coverage badge
