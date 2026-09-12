@@ -89,7 +89,7 @@ def pick(self, n):
 
 Deciding whether `self.fib(n)` is a dependency requires knowing
 `self.threshold()`. So `threshold` must be evaluated during expansion, while
-`fib` must not be. Each input records the slots resolving *it* reads — the
+`fib` must not be. Each input records the slots resolving _it_ reads — the
 `self.fib(n)` edge reads `{0, 1}`, the parameter and `threshold` — and
 `CompiledNode.needed` is the union over the edges, which is what expansion
 evaluates. `deps(pick, 5)` is `{threshold, fib(5)}`; `deps(pick, 1)` is
@@ -112,9 +112,11 @@ cell.slots[4].blocked_by  # {3} — this one would cost an evaluation
 cell.expand_slot(4)  # pay for that one slot, and nothing else
 ```
 
-`expand_slot` records nothing. Only `expand`, which takes every slot at once,
-writes to the dependency map — so a cell can never be left looking as though it
-had fewer dependencies than it has.
+`expand_slot` records what it resolves, same as `expand` — the two write to the
+same per-slot record, so a slot either of them fills in stays resolved for the
+other. What `expand_slot` never gives you is a cell looking fully expanded from
+a partial answer: until every slot has been asked for, the record just says so
+plainly, `UNRESOLVED` where nothing has looked yet.
 
 This is the "edges change the shape of the graph" case: computing which cell you
 depend on is itself a graph computation.
@@ -131,15 +133,15 @@ p.pv()  # 40.0, recomputing only payoff and pv
 p.spot.clear_value()  # back to 20.0
 ```
 
-`set_value(value, args=())` takes the value first; `args` names *which* cell for
+`set_value(value, args=())` takes the value first; `args` names _which_ cell for
 a node that takes parameters, so `sheet.fib.set_value(2.0, args=(0,))` sets
 `fib(0)` alone.
 
-Dirtying walks dependency edges backwards. The graph only stores forward edges,
-so `_deps` is inverted in a single pass each time a value is set. That costs
-O(edges) per set but keeps the graph's mutable state small, which matters for
-the next part. The walk **stops at a cell that has its own override**: such a
-cell's value cannot change, so nothing behind it is stale.
+Dirtying walks dependency edges backwards. The graph keeps a reverse index
+beside the forward one, updated incrementally every time a slot is recorded,
+reset, or discarded, so `set_value` walks straight back from readers to readers
+without inverting anything. The walk **stops at a cell that has its own
+override**: such a cell's value cannot change, so nothing behind it is stale.
 
 An overridden cell reports no dependencies — its body will never run, so it
 depends on nothing. Its dependents still list it, and clearing the override
@@ -167,13 +169,13 @@ wins. Exit writes those four fields back, deleting where the snapshot says the
 key was absent.
 
 One mechanism therefore covers everything exit has to undo: values the diddle
-invalidated come back, values computed *under* the diddle are dropped, and
+invalidated come back, values computed _under_ the diddle are dropped, and
 overrides revert to whatever the enclosing scope had. That last one is why
 nesting needs no special case — an inner scope restores exactly the state the
 outer scope had produced, so the outer scope's own snapshots stay valid.
 
 Because dependency edges are snapshotted alongside values, a diddle that changes
-the *shape* of the graph (through `needed`, above) is restored too, not just the
+the _shape_ of the graph (through `needed`, above) is restored too, not just the
 numbers in it.
 
 The mutating methods on a bound node — `set_value`, `clear_value`, `is_dirty` —
@@ -183,7 +185,7 @@ act on the default graph, as `__call__` does. Drive another `Graph` through
 ## Depending on other objects
 
 A cell key is `(object, method, *args)`, so cells on different objects were
-never a problem — what was missing was a way for an *edge* to name an object
+never a problem — what was missing was a way for an _edge_ to name an object
 other than `self`. `Edge.receiver` is that: a compiled lambda returning the
 object to call `target` on.
 
@@ -199,7 +201,7 @@ ivs[1] = self.EquityObj().StockPrice()  <- Edge, receiver ivs[0]
 needed = {0}
 ```
 
-Resolving *which object* is the same problem as resolving an edge's arguments,
+Resolving _which object_ is the same problem as resolving an edge's arguments,
 and uses the same machinery: the receiver expression is rewritten to read `ivs`,
 and the inputs it reads go into the edge's `reads` — and so into `needed`, so
 expansion evaluates them. Finding `Strike`'s dependencies runs `EquityObj` — it
@@ -209,14 +211,14 @@ has to, that is what names the cell — but not `StockPrice`.
 The receiver is resolved during expansion and then, if the attribute is a node,
 the input is a dependency; if it is not, it is an ordinary call:
 
-| Written | Becomes |
-|---|---|
-| `self.fib(n - 1)` | edge, receiver `self` |
-| `self.helper()`, where `helper` is not a node | left in the body |
-| `self.Market().spot()` | edge on the other object |
-| `self.ns['/Equities/ABC'].spot()` | edge on the looked-up object |
-| `self.Ticker().upper()` | edge's receiver is a cell; `.upper()` is a plain call |
-| `datetime.date.today()` | untouched |
+| Written                                       | Becomes                                               |
+| --------------------------------------------- | ----------------------------------------------------- |
+| `self.fib(n - 1)`                             | edge, receiver `self`                                 |
+| `self.helper()`, where `helper` is not a node | left in the body                                      |
+| `self.Market().spot()`                        | edge on the other object                              |
+| `self.ns['/Equities/ABC'].spot()`             | edge on the looked-up object                          |
+| `self.Ticker().upper()`                       | edge's receiver is a cell; `.upper()` is a plain call |
+| `datetime.date.today()`                       | untouched                                             |
 
 Because the receiver is an input like any other, it inherits the guard at its
 call site: inside an `if` that does not hold, neither the receiver nor the cell
@@ -369,7 +371,7 @@ Imports run one way, `compiler -> ir <- runtime`, with `node` on top:
   reads the source with `inspect.getsourcelines`, rewrites the AST, then builds
   a `__make` factory containing the rewritten body plus three lambdas per edge
   (its receiver, its args, its guard) and `exec`s it. The factory exists so
-  those lambdas close over the *original method's* free variables. Inside it the
+  those lambdas close over the _original method's_ free variables. Inside it the
   body is renamed to `__impl`: keeping the node's own name would shadow a free
   variable called the same thing.
 - **`runtime`** holds everything that happens per cell. `Graph.expand` walks
@@ -392,10 +394,11 @@ Two registries with deliberately different lifetimes:
 
 - **Compilation** is write-once per class and lives on the descriptor, as
   `Node.compiled`.
-- **Cells** live in a `Graph`: `_deps` (expanded), `_known` (referenced),
-  `_values` (memoised), `_overrides` (set directly), `_dirty` (stale) and
-  `_layers` (open diddle scopes). `graph.deps(...)` and friends use the
-  module-level `DEFAULT`; construct `Graph()` for an isolated one.
+- **Cells** live in a `Graph`: `_expansions` (per-slot records, forward and
+  reverse), `_known` (referenced), `_values` (memoised), `_overrides` (set
+  directly), `_dirty` (stale) and `_layers` (open diddle scopes).
+  `graph.deps(...)` and friends use the module-level `DEFAULT`; construct
+  `Graph()` for an isolated one.
 
 Overrides and dirty flags are runtime state, in the graph — never on the `Node`.
 A node is compiled once and is then read-only, so two graphs can diddle the same
@@ -421,7 +424,7 @@ and its guard back together, so keeping them in separate fields costs nothing at
 the point of reading and lets a tool show guard status in a column of its own.
 
 `GuardStack.scope()` captures the stack depth **on entry** and truncates to it on
-exit. This matters: an earlier version removed a *count* of guards instead, so a
+exit. This matters: an earlier version removed a _count_ of guards instead, so a
 guard pushed mid-block by an early return corrupted the accounting and produced
 `n > 0 and (not n > 0)` — a dependency that was silently dropped and a node that
 returned `None`. The graph was wrong, not loud. See
@@ -459,7 +462,7 @@ restores the graph shape on exit like any other.
 ## Comprehensions
 
 A book is a collection of positions, and its PV is the sum of theirs. That is one
-call site naming *many* cells — as many as the book has members, which is not
+call site naming _many_ cells — as many as the book has members, which is not
 known until the member list has been evaluated:
 
 ```python
@@ -481,7 +484,7 @@ return sum(ivs[1])
 `MapEdge.over` produces the collection; `receiver` and `args` take the element
 as a fourth parameter, named after the comprehension's own loop variable, so the
 loop variable needs no rewriting — `self.ns[path]` compiles to a lambda of
-`(self, node, ivs, path)`. That is what lets a book hold *names* rather than
+`(self, node, ivs, path)`. That is what lets a book hold _names_ rather than
 objects, which is why it is the shape `analytics.Book` uses (see
 `docs/adr/0002-book-representation.md`).
 
@@ -495,14 +498,14 @@ expression compile identically; a set comprehension is rejected because it would
 silently drop cells whose values happen to be equal, and a dict comprehension
 because it is not one list of cells.
 
-| Written | Becomes |
-|---|---|
-| `[p.pv() for p in self.Positions()]` | map, receiver is the element |
-| `[self.ns[p].pv() for p in self.Paths()]` | map, receiver built from the element |
-| `[p.pv() * 2 for p in self.Positions()]` | raises — the element must be the call |
-| `[p.pv() * p.size() for p in self.Positions()]` | raises — one node call, not two |
-| `[p.pv() for p in self.Positions() if p.live()]` | raises — no filter yet |
-| `[r * 2 for r in self.Rates()]` | plain code over one edge's value |
+| Written                                          | Becomes                               |
+| ------------------------------------------------ | ------------------------------------- |
+| `[p.pv() for p in self.Positions()]`             | map, receiver is the element          |
+| `[self.ns[p].pv() for p in self.Paths()]`        | map, receiver built from the element  |
+| `[p.pv() * 2 for p in self.Positions()]`         | raises — the element must be the call |
+| `[p.pv() * p.size() for p in self.Positions()]`  | raises — one node call, not two       |
+| `[p.pv() for p in self.Positions() if p.live()]` | raises — no filter yet                |
+| `[r * 2 for r in self.Rates()]`                  | plain code over one edge's value      |
 
 The two that raise are asking for a node on the element that combines them —
 `t.weighted_pv()` — which is better modelling anyway. A loop-invariant call can
@@ -510,7 +513,7 @@ be hoisted into an assignment above the comprehension instead.
 
 Every element must resolve the same way. A collection whose members' targets are
 all nodes gives one dependency each; one where none are gives plain calls and no
-dependencies; a *mixed* one raises `TypeError` when it resolves, because
+dependencies; a _mixed_ one raises `TypeError` when it resolves, because
 contributing dependencies for some members and silently not for others is
 exactly the half-connected graph this layer exists to prevent.
 
@@ -520,16 +523,16 @@ These raise `ValueError` when the class is created, rather than building a wrong
 graph. Adding support for any of them means answering "what is the fixed list of
 inputs?" first.
 
-| Pattern | Why |
-|---|---|
-| Node call in a loop or lambda | Not one call site, so not one input. A comprehension *is* supported — see above. |
-| A comprehension with a filter, two `for` clauses, or more than one node call | One input names one collection of cells; see the table above for what to write instead. |
-| `self.x` member variables, except `self.ns` | A node may only see functions and constants. |
-| `self` used as a value | Would smuggle member access out to a helper. |
-| Node call argument using a non-hoistable local | Inputs are hoisted; a local that is rebound, conditional, or reads another such local cannot come with them (see above). |
-| Rebinding a parameter | Parameters are read-only inputs. |
-| A stored node with parameters | What is persisted is one cell per object. |
-| `async def`, `*args`/`**kwargs` at a call site | Not modelled. |
+| Pattern                                                                      | Why                                                                                                                      |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Node call in a loop or lambda                                                | Not one call site, so not one input. A comprehension _is_ supported — see above.                                         |
+| A comprehension with a filter, two `for` clauses, or more than one node call | One input names one collection of cells; see the table above for what to write instead.                                  |
+| `self.x` member variables, except `self.ns`                                  | A node may only see functions and constants.                                                                             |
+| `self` used as a value                                                       | Would smuggle member access out to a helper.                                                                             |
+| Node call argument using a non-hoistable local                               | Inputs are hoisted; a local that is rebound, conditional, or reads another such local cannot come with them (see above). |
+| Rebinding a parameter                                                        | Parameters are read-only inputs.                                                                                         |
+| A stored node with parameters                                                | What is persisted is one cell per object.                                                                                |
+| `async def`, `*args`/`**kwargs` at a call site                               | Not modelled.                                                                                                            |
 
 Also not supported: unhashable arguments, and a node reached through anything
 that does not read `self` and is not a comprehension's element — `other.a()`,
@@ -546,25 +549,17 @@ source code`.
 uv run ruff format      # standardise formatting
 uv run ruff check --fix # lint
 uv run ty check         # types
-uv run pytest -q        # 158 tests
+uv run pyright          # types & checking too (to match what's in VSCode and avoid problems)
+uv run pytest -q        # run tests
 ```
 
 Tests mirror the packages, one folder each:
 
 ```
-tests/graph/     test_rewrite (the transform and its rejections), test_deps
-                 (graph shape), test_eval (order and memoisation), test_api
-                 (decorator surface), test_set_value (overrides and dirtying),
-                 test_diddle (scoped overrides), test_cross_object (edges
-                 reaching other objects), test_stored (the Stored marker)
-tests/ns/        test_namespace, test_store
-tests/analytics/ test_blackscholes (the pure maths), test_market and
-                 test_instrument (the /mkt and /inst objects),
-                 test_greeks_by_diddle (the recompute-set artefact)
+tests/graph/
+tests/ns/
+tests/analytics/
 tests/tui/graph_browser/
-                 test_render (what is shown, without a terminal), test_app
-                 (the application, driven headless), test_packaging (the
-                 extra stays optional)
 ```
 
 Shared class factories are in `tests/helpers.py`; each test builds its own
