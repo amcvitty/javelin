@@ -1,7 +1,7 @@
 """What one cell looks like on screen.
 
-Every test here goes through `browser.render`, which the terminal library
-knows nothing about: what is shown can be checked without a terminal, and the
+Every test here goes through `tui.graph_browser.render`, which the terminal
+library knows nothing about: what is shown can be checked without a terminal, and the
 rendering logic is the part worth checking.
 
 The recurring question is whether the display keeps apart what the engine
@@ -13,9 +13,9 @@ import pytest
 
 import graph
 import ns
-from browser import render
 from graph import node
 from ns import McObject
+from tui.graph_browser import render
 
 
 def make_market():

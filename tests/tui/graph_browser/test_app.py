@@ -21,8 +21,8 @@ pytest.importorskip("textual", reason="the tui extra is not installed")
 
 from textual.widgets import DataTable
 
-from browser import show_node
-from browser.app import CellBrowser
+from tui.graph_browser import show_node
+from tui.graph_browser.app import CellBrowser
 
 
 @pytest.fixture

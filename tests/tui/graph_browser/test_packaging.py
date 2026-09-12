@@ -44,7 +44,7 @@ class TestOptionalExtra:
         """)
 
     def test_the_rendering_logic_imports_without_the_terminal_library(self):
-        """With the library made unimportable, `browser.render` still loads --
+        """With the library made unimportable, the rendering still loads --
         so the engine's own tests pass in an install without the extra."""
         run("""
             import sys
@@ -57,7 +57,7 @@ class TestOptionalExtra:
 
             sys.meta_path.insert(0, Blocked())
 
-            from browser import render
+            from tui.graph_browser import render
 
             assert render.INPUT_COLUMNS[0] == "slot"
 
@@ -70,12 +70,20 @@ class TestOptionalExtra:
         """)
 
     def test_no_module_of_the_graph_package_names_the_terminal_library(self):
-        """A grep, in effect: the import that must never be written."""
+        """A grep, in effect: the imports that must never be written.
+
+        Matched as import statements rather than as substrings -- `tui` alone
+        would fire on the word "intuitive".
+        """
         import pathlib
+        import re
 
         import graph
 
+        forbidden = re.compile(
+            r"^\s*(?:from|import)\s+(textual|rich|tui)\b", re.MULTILINE
+        )
+
         for module in pathlib.Path(graph.__file__).parent.glob("*.py"):
-            source = module.read_text()
-            assert "textual" not in source, module
-            assert "browser" not in source, module
+            found = forbidden.search(module.read_text())
+            assert found is None, f"{module} imports {found.group(1)}"

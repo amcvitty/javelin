@@ -23,7 +23,7 @@ dev = [
 ]
 
 [tool.coverage.run]
-source = ["analytics", "graph", "ns"]
+source = ["analytics", "graph", "ns", "tui"]
 branch = true
 
 [tool.coverage.report]

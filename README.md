@@ -299,13 +299,13 @@ See [CONTEXT.md](CONTEXT.md) and
 the object naming scheme, and [example_pricer.py](example_pricer.py) for the
 whole thing running.
 
-## Looking at a cell: the browser
+## Looking at a cell: the graph browser
 
 Everything the engine knows about one cell can be put on screen without
 running any of it:
 
 ```python
-from browser import show_node
+from tui.graph_browser import show_node
 
 show_node(book.pv, True)
 ```
@@ -322,11 +322,11 @@ acquires nothing:
 
 ```
 uv sync --extra tui
-python -m browser          # the demo in example_browser.py
+python -m tui.graph_browser   # the demo in example_browser.py
 ```
 
-`browser` imports `graph`; `graph` never imports `browser`, and its own tests
-pass in an install without the extra.
+`tui.graph_browser` imports `graph`; `graph` never imports `tui`, and its own
+tests pass in an install without the extra.
 
 ## Layout
 
@@ -351,15 +351,17 @@ analytics/
   instrument.py    EuropeanOption -- the /inst objects
   __init__.py      public API
 
-browser/
-  render.py     what a cell looks like, as plain data -- no terminal import
-  app.py        the terminal application: the only module importing textual
-  __main__.py   python -m browser: the demo at example_browser.py
-  __init__.py   show_node()
+tui/
+  __init__.py       a home for terminal tools; imports nothing itself
+  graph_browser/
+    render.py     what a cell looks like, as plain data -- no terminal import
+    app.py        the terminal application: the only module importing textual
+    __main__.py   python -m tui.graph_browser: the demo at example_browser.py
+    __init__.py   show_node()
 ```
 
 `analytics` depends on `ns`, `ns` depends on `graph`; imports never run the
-other way. `browser` sits outside that stack and depends on `graph` alone.
+other way. `tui` sits outside that stack and depends on `graph` alone.
 
 Imports run one way, `compiler -> ir <- runtime`, with `node` on top:
 
@@ -559,7 +561,8 @@ tests/ns/        test_namespace, test_store
 tests/analytics/ test_blackscholes (the pure maths), test_market and
                  test_instrument (the /mkt and /inst objects),
                  test_greeks_by_diddle (the recompute-set artefact)
-tests/browser/   test_render (what is shown, without a terminal), test_app
+tests/tui/graph_browser/
+                 test_render (what is shown, without a terminal), test_app
                  (the application, driven headless), test_packaging (the
                  extra stays optional)
 ```

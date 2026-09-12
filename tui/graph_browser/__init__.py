@@ -13,8 +13,8 @@ A debugging tool, so it is an optional extra rather than a dependency:
 
 The engine has no runtime dependencies and installing it should not acquire
 any, so the terminal library is imported here, inside `show_node`, rather than
-at module scope -- `browser.render` can be imported and tested without it, and
-the `graph` package never reaches in this direction at all.
+at module scope -- `tui.graph_browser.render` can be imported and tested
+without it, and the `graph` package never reaches in this direction at all.
 """
 
 from graph import DEFAULT, Cell, make_key

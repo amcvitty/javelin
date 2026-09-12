@@ -7,13 +7,13 @@ once. The objects live at real `/mkt`, `/inst` and `/book` names, so the
 identity column has long paths to truncate and two markets on different
 underlyings to keep apart.
 
-Run it directly, or `python -m browser`, which shows the same cell.
+Run it directly, or `python -m tui.graph_browser`, which shows the same cell.
 """
 
 import ns
-from browser import show_node
 from graph import node
 from ns import McObject
+from tui.graph_browser import show_node
 
 #: Enough legs that the map edge overflows the table's cap and has to
 #: summarise the remainder.

@@ -1,6 +1,6 @@
 """The terminal application: one cell, three regions, no navigation yet.
 
-The only module that imports the terminal library. What to show is
+The one module in this package that imports the terminal library. What to show is
 `render`'s job and is plain data by the time it arrives here; this module
 places it on screen.
 
