@@ -178,6 +178,76 @@ class TestSourcePanes:
         press(CellBrowser(cell), ["enter", "backspace"], row=1, check=check)
 
 
+class TestSourcePaneSizing:
+    """A pane is sized to its text: 4 rows minimum, 10 rows maximum."""
+
+    def test_a_short_body_gets_the_minimum_height(self):
+        class Tiny:
+            @node
+            def a(self):
+                return 1
+
+        cell = graph.cell(Tiny().a.key())
+
+        def check(app):
+            assert app.query_one("#original", TextArea).styles.height.value == 4
+            assert app.query_one("#compiled", TextArea).styles.height.value == 4
+
+        drive(CellBrowser(cell), check)
+
+    def test_a_mid_sized_body_is_sized_to_its_own_line_count(self, book):
+        cell = graph.cell(book.pv.key(True))
+
+        def check(app):
+            original = app.query_one("#original", TextArea)
+            assert 4 < original.styles.height.value < 10
+
+        drive(CellBrowser(cell), check)
+
+    def test_a_long_body_is_capped_with_a_scrollbar(self):
+        class Huge:
+            @node
+            def big(self):
+                total = 0
+                total = total + 1
+                total = total + 2
+                total = total + 3
+                total = total + 4
+                total = total + 5
+                total = total + 6
+                total = total + 7
+                total = total + 8
+                total = total + 9
+                total = total + 10
+                total = total + 11
+                total = total + 12
+                return total
+
+        cell = graph.cell(Huge().big.key())
+
+        def check(app):
+            original = app.query_one("#original", TextArea)
+            compiled = app.query_one("#compiled", TextArea)
+            assert original.styles.height.value == 10
+            assert original.show_vertical_scrollbar is True
+            assert compiled.styles.height.value == 10
+            assert compiled.show_vertical_scrollbar is True
+
+        drive(CellBrowser(cell), check)
+
+    def test_the_height_is_recomputed_when_drilling_to_a_differently_sized_cell(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+        seen = {}
+
+        def check(app):
+            seen["height"] = app.query_one("#original", TextArea).styles.height.value
+
+        press(CellBrowser(cell), ["enter"], row=1, check=check)  # rate(): one cell
+
+        assert seen["height"] == 4  # rate() is a one-line body
+
+
 class TestShowNode:
     """The entry point takes a bound node, its arguments, and a graph."""
 
