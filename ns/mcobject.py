@@ -43,7 +43,7 @@ class McObject:
     @classmethod
     def default_name(cls):
         """A unique name for an object nothing refers to by name."""
-        return f"/{cls.__name__}/{uuid.uuid4().hex}"
+        return f"/limbo/{cls.__name__}/{uuid.uuid4().hex}"
 
     def stored_values(self):
         """This object's stored cells, as {node name: value}.
