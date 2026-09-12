@@ -19,7 +19,7 @@ class TestCreation:
 
         mkt = ns.new(Market)
 
-        assert mkt.name.startswith("/Market/")
+        assert mkt.name.startswith("/limbo/Market/")
         assert ns.new(Market).name != mkt.name
 
     def test_str_names_the_class_and_the_object(self):
