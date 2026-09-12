@@ -47,6 +47,8 @@ each slot resolved to:
     graph.cell(book.total.key(True)).expand_slot(4)
 """
 
+import inspect
+
 from .cell import Cell, Slot
 from .ir import (
     Call,
@@ -93,6 +95,7 @@ __all__ = [
     "inputs",
     "make_key",
     "node",
+    "source",
     "stored_nodes",
 ]
 
@@ -113,6 +116,25 @@ def inputs(method):
 def code(method):
     """The rewritten source of a node: a pure function of (self, node, ivs)."""
     return _compiled_of(method).code
+
+
+def source(method):
+    """The node's original source, as written -- None if it can't be read.
+
+    Reads the same Node.func the compiler already reads to produce code(),
+    but returns None rather than raising when inspect.getsource can't find
+    it -- a dynamically-defined function, say -- mirroring how the rest of
+    the engine tells "not available" apart from an error.
+    """
+    node = getattr(method, "__func__", method)
+    try:
+        func = node.func
+    except AttributeError:
+        raise KeyError(method) from None
+    try:
+        return inspect.getsource(func)
+    except OSError:
+        return None
 
 
 def deps(method, *args, **kwargs):

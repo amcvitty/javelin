@@ -45,7 +45,9 @@ def fib(self, n):
 ```
 
 What gets compiled — a body that reads only `ivs`, plus one input spec per slot
-(`graph.code(Sheet.fib)` and `graph.inputs(Sheet.fib)` print exactly this):
+(`graph.code(Sheet.fib)` and `graph.inputs(Sheet.fib)` print exactly this;
+`graph.source(Sheet.fib)` prints the "What you wrote" half instead, or `None`
+if `inspect.getsource` can't resolve it):
 
 ```text
 def fib(self, node, ivs):
@@ -318,6 +320,12 @@ guard it sits under and the slots resolving it reads -- and a second table
 lists the cells known to read it. A slot nothing has looked at says `not yet
 resolved` rather than guessing, which is a different answer from a call site
 its guard blocks; a map edge fans out to a row per element once resolved.
+
+Below the tables, two read-only, Python-highlighted panes show the node's
+source -- `graph.source(cell.node)` as written and `graph.code(cell.node)` as
+compiled -- side by side, always both, refreshed on every drill and back
+navigation. Either pane shows "Source unavailable" instead of going blank
+when its accessor returns `None`.
 
 The terminal library is an optional extra, so installing the engine still
 acquires nothing:

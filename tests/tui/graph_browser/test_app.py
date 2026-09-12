@@ -16,14 +16,15 @@ import graph
 import ns
 from graph import node
 from ns import McObject
-from tests.helpers import make_book, make_raising
+from tests.helpers import make_book, make_dynamic_node, make_raising
 
 pytest.importorskip("textual", reason="the tui extra is not installed")
 
-from textual.widgets import DataTable
+from textual.widgets import DataTable, TextArea
 
 from tui.graph_browser import show_node
 from tui.graph_browser.app import Card, CellBrowser, TracebackScreen
+from tui.graph_browser.render import SOURCE_UNAVAILABLE
 
 
 @pytest.fixture
@@ -121,6 +122,57 @@ class TestTheApp:
         app = CellBrowser(graph.cell(book.pv.key(True)))
 
         assert app.sub_title == "Book.pv(True)"
+
+
+class TestSourcePanes:
+    """Two read-only, Python-highlighted panes: original and compiled."""
+
+    def test_both_panes_mount_and_are_filled(self, book):
+        cell = graph.cell(book.pv.key(True))
+
+        def check(app):
+            original = app.query_one("#original", TextArea)
+            compiled = app.query_one("#compiled", TextArea)
+            assert original.language == "python"
+            assert original.read_only is True
+            assert "def pv(self, hedged):" in original.text
+            assert compiled.language == "python"
+            assert compiled.read_only is True
+            assert compiled.text == graph.code(cell.node)
+
+        drive(CellBrowser(cell), check)
+
+    def test_a_cell_with_no_original_source_shows_the_placeholder_in_that_pane_only(
+        self,
+    ):
+        Dynamic = make_dynamic_node()
+        cell = graph.cell(Dynamic().value.key())
+
+        def check(app):
+            assert app.query_one("#original", TextArea).text == SOURCE_UNAVAILABLE
+            assert app.query_one("#compiled", TextArea).text != SOURCE_UNAVAILABLE
+
+        drive(CellBrowser(cell), check)
+
+    def test_drilling_into_a_different_cell_refreshes_both_panes(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+
+        def check(app):
+            assert "def rate(self):" in app.query_one("#original", TextArea).text
+            assert app.query_one("#compiled", TextArea).text == graph.code(book.rate)
+
+        press(CellBrowser(cell), ["enter"], row=1, check=check)  # rate(): one cell
+
+    def test_navigating_back_refreshes_both_panes_too(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+
+        def check(app):
+            original = app.query_one("#original", TextArea).text
+            assert "def total(self, live):" in original
+
+        press(CellBrowser(cell), ["enter", "backspace"], row=1, check=check)
 
 
 class TestShowNode:

@@ -1,9 +1,10 @@
 """What one cell looks like on screen, worked out without a terminal.
 
-Three shapes, one per region of the display: a header card of label/value
-pairs, a row per input slot, and a row per known output. Each is plain data,
-so what is shown can be tested without a terminal attached and the terminal
-library stays on the other side of this module.
+Four shapes, one per region of the display: a header card of label/value
+pairs, a row per input slot, a row per known output, and a pair of source
+strings -- the node as written and as compiled. Each is plain data, so what
+is shown can be tested without a terminal attached and the terminal library
+stays on the other side of this module.
 
 Nothing here evaluates anything. Reading a cell's value, its slots and its
 outputs is what the engine already knows; the statically resolvable slots come
@@ -22,6 +23,7 @@ says which.
 
 from dataclasses import dataclass
 
+import graph
 from graph import UNRESOLVED, Cell, InputKind, ValueState
 
 #: How much room the identity column has before it is truncated.
@@ -48,6 +50,9 @@ _ELLIPSIS = "..."
 
 #: A terminal whose value the key does not carry, which `None` would look like.
 _MISSING = object()
+
+#: Shown in a source pane in place of a body neither accessor could read.
+SOURCE_UNAVAILABLE = "Source unavailable"
 
 
 def truncate_left(text, width=IDENTITY_WIDTH):
@@ -147,6 +152,16 @@ def header_card(cell):
         ("value", str(cell.value)),
         ("type", value_type(cell.value)),
     )
+
+
+def original_source(cell):
+    """The node's source as written, or the placeholder when it can't be read."""
+    return graph.source(cell.node) or SOURCE_UNAVAILABLE
+
+
+def compiled_source(cell):
+    """The node's rewritten source, or the placeholder when it can't be read."""
+    return graph.code(cell.node) or SOURCE_UNAVAILABLE
 
 
 @dataclass(frozen=True)

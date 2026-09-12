@@ -17,7 +17,7 @@ from typing import ClassVar
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Footer, Header, Static, TextArea
 
 from .navigation import Navigation
 from .render import (
@@ -26,8 +26,10 @@ from .render import (
     InputRow,
     OutputRow,
     cell_label,
+    compiled_source,
     header_card,
     input_rows,
+    original_source,
     output_rows,
 )
 
@@ -141,6 +143,7 @@ class CellBrowser(App):
     #breadcrumb { padding: 0 2; color: $text-muted; }
     .heading { padding: 0 2; color: $accent; text-style: bold; }
     DataTable { height: auto; margin: 0 2 1 2; }
+    TextArea { height: 15; margin: 0 2 1 2; }
     """
 
     BINDINGS: ClassVar = [
@@ -182,6 +185,10 @@ class CellBrowser(App):
             # partial list is the only one there could be.
             yield Static("outputs", classes="heading")
             yield DataTable(id="outputs", cursor_type="row")
+            yield Static("original", classes="heading")
+            yield TextArea(id="original", language="python", read_only=True)
+            yield Static("compiled", classes="heading")
+            yield TextArea(id="compiled", language="python", read_only=True)
         yield Footer()
 
     def on_mount(self):
@@ -342,6 +349,8 @@ class CellBrowser(App):
         self._output_rows = self._marked(output_rows(cell), self._output_marker)
         self._set_rows("#inputs", INPUT_COLUMNS, self._input_rows)
         self._set_rows("#outputs", OUTPUT_COLUMNS, self._output_rows)
+        self.query_one("#original", TextArea).load_text(original_source(cell))
+        self.query_one("#compiled", TextArea).load_text(compiled_source(cell))
 
     def _marked(self, rows, marker_of):
         """Flag whichever of `rows` last raised, input or output alike.
