@@ -218,6 +218,58 @@ def make_chooser():
     return Chooser
 
 
+def make_raising():
+    """Every way a cell can fail without the engine ever unwinding for it.
+
+    Returns a namespace of classes covering the browser's three failure
+    modes: `Boom.broken` raises from its own body; `Guarded.maybe` raises
+    from the guard that decides whether its edge is reached; `Bad.total`
+    maps over a mix of objects that do and do not carry the node it calls,
+    which the engine rejects deliberately rather than silently dropping
+    the ones that don't.
+    """
+
+    class Boom:
+        @node
+        def broken(self):
+            raise ValueError("boom")
+
+    class HasPv:
+        @node
+        def pv(self):
+            return 1.0
+
+    class NoPv:
+        def pv(self):
+            return 2.0
+
+    class Bad:
+        @node
+        def elements(self):
+            return [HasPv(), NoPv()]
+
+        @node
+        def total(self):
+            return sum(e.pv() for e in self.elements())
+
+    class Guarded:
+        @node
+        def check(self):
+            raise RuntimeError("guard boom")
+
+        @node
+        def dep(self):
+            return 1.0
+
+        @node
+        def maybe(self):
+            if self.check():
+                return self.dep()
+            return 0.0
+
+    return Boom, Bad, Guarded
+
+
 @contextlib.contextmanager
 def spy_bodies(evaluated, *classes):
     """Record ``(object name, node name)`` each time a node *body* runs.
