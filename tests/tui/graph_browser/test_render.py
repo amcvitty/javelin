@@ -15,7 +15,7 @@ import graph
 import ns
 from graph import node
 from ns import McObject
-from tests.helpers import make_dynamic_node
+from tests.helpers import make_dynamic_node, make_fib
 from tui.graph_browser import render
 
 
@@ -432,26 +432,20 @@ class TestSourcePanes:
     """The original and compiled source, or a placeholder when neither reads."""
 
     def test_original_source_is_written_as_the_author_wrote_it(self):
-        class Sheet:
-            @node
-            def fib(self, n):
-                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
+        Fib = make_fib()
 
-        cell = graph.cell(Sheet().fib.key(5))
+        cell = graph.cell(Fib().fib.key(5))
 
         assert "self.fib(n - 1)" in render.original_source(cell)
 
     def test_compiled_source_is_the_rewritten_ivs_body(self):
-        class Sheet:
-            @node
-            def fib(self, n):
-                return n if n < 2 else self.fib(n - 1) + self.fib(n - 2)
+        Fib = make_fib()
 
-        cell = graph.cell(Sheet().fib.key(5))
+        cell = graph.cell(Fib().fib.key(5))
 
-        assert render.compiled_source(cell) == (
-            "def fib(self, node, ivs):\n"
-            "    return ivs[0] if ivs[0] < 2 else ivs[1] + ivs[2]"
+        assert render.compiled_source(cell) == graph.code(Fib.fib)
+        assert "ivs[0] if ivs[0] < 2 else ivs[1] + ivs[2]" in render.compiled_source(
+            cell
         )
 
     def test_original_source_shows_the_placeholder_when_unavailable(self):

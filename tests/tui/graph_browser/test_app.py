@@ -169,8 +169,8 @@ class TestSourcePanes:
         cell = graph.cell(book.total.key(True))
 
         def check(app):
-            original = app.query_one("#original", TextArea).text
-            assert "def total(self, live):" in original
+            assert "def total(self, live):" in app.query_one("#original", TextArea).text
+            assert app.query_one("#compiled", TextArea).text == graph.code(book.total)
 
         press(CellBrowser(cell), ["enter", "backspace"], row=1, check=check)
 

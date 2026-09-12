@@ -156,12 +156,14 @@ def header_card(cell):
 
 def original_source(cell):
     """The node's source as written, or the placeholder when it can't be read."""
-    return graph.source(cell.node) or SOURCE_UNAVAILABLE
+    text = graph.source(cell.node)
+    return SOURCE_UNAVAILABLE if text is None else text
 
 
 def compiled_source(cell):
     """The node's rewritten source, or the placeholder when it can't be read."""
-    return graph.code(cell.node) or SOURCE_UNAVAILABLE
+    text = graph.code(cell.node)
+    return SOURCE_UNAVAILABLE if text is None else text
 
 
 @dataclass(frozen=True)

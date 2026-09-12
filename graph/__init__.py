@@ -100,12 +100,16 @@ __all__ = [
 ]
 
 
-def _compiled_of(method):
+def _node_of(method):
     """Accept a node from the class (Calc.fib) or bound to an instance (calc.fib)."""
-    try:
-        return getattr(method, "__func__", method).compiled
-    except AttributeError:
-        raise KeyError(method) from None
+    node = getattr(method, "__func__", method)
+    if not hasattr(node, "compiled"):
+        raise KeyError(method)
+    return node
+
+
+def _compiled_of(method):
+    return _node_of(method).compiled
 
 
 def inputs(method):
@@ -126,13 +130,8 @@ def source(method):
     it -- a dynamically-defined function, say -- mirroring how the rest of
     the engine tells "not available" apart from an error.
     """
-    node = getattr(method, "__func__", method)
     try:
-        func = node.func
-    except AttributeError:
-        raise KeyError(method) from None
-    try:
-        return inspect.getsource(func)
+        return inspect.getsource(_node_of(method).func)
     except OSError:
         return None
 
