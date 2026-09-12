@@ -77,6 +77,19 @@ class Namespace:
         """Persist an object, so that a later lookup of its name finds it."""
         self._store.write(obj.name, type(obj), obj.stored_values())
 
+    def reload(self, obj):
+        """Reset `obj`'s stored cells to what is currently in the store."""
+        found = self._store.read(obj.name)
+        if found is None:
+            raise KeyError(obj.name)
+        cls, values = found
+        if cls is not type(obj):
+            raise TypeError(
+                f"{obj.name} is stored as {cls.__name__}, not {type(obj).__name__}"
+            )
+        self._apply(obj, values)
+        return obj
+
     def _load(self, name):
         """Rebuild an object from the store, or None if it is not there."""
         found = self._store.read(name)

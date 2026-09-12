@@ -32,6 +32,7 @@ __all__ = [
     "all_objects",
     "clear",
     "clear_store",
+    "lookup",
     "lookup_or_new",
     "new",
 ]
@@ -40,6 +41,11 @@ __all__ = [
 def new(cls, **values):
     """A new object in the default namespace, with a generated name."""
     return DEFAULT.new(cls, **values)
+
+
+def lookup(name):
+    """The object called `name` in the default namespace, or KeyError."""
+    return DEFAULT[name]
 
 
 def lookup_or_new(name, cls, **values):

@@ -10,6 +10,7 @@ import pytest
 
 import graph
 import ns
+from ns.mcobject import CREATION_TOKEN
 from ns.store import SqliteStore
 from tests.helpers import Unstorable, make_market_classes, ran
 
@@ -80,6 +81,45 @@ class TestRoundTrip:
         namespace.lookup_or_new("/Params", Params)
 
         assert namespace["/Equities/ABC"].scaled() == 40.0
+
+
+class TestReload:
+    def test_reload_picks_up_a_change_made_elsewhere(self, namespace):
+        _, Market = make_market_classes()
+        mkt = namespace.lookup_or_new("/Equities/ABC", Market, spot=20.0)
+        mkt.store()
+        namespace.lookup_or_new("/Equities/ABC", Market, spot=30.0).store()
+        mkt.spot.set_value(999.0)
+
+        reloaded = mkt.reload()
+
+        assert reloaded is mkt
+        assert mkt.spot() == 30.0
+
+    def test_reload_runs_no_bodies(self, namespace):
+        _, Market = make_market_classes()
+        mkt = namespace.lookup_or_new("/Equities/ABC", Market, spot=20.0)
+        mkt.store()
+        ran.clear()
+
+        mkt.reload()
+
+        assert ran == []
+
+    def test_reloading_something_never_stored_raises(self, namespace):
+        _, Market = make_market_classes()
+        mkt = namespace.new(Market)
+
+        with pytest.raises(KeyError, match=mkt.name):
+            mkt.reload()
+
+    def test_reloading_onto_the_wrong_class_raises(self, namespace):
+        Params, Market = make_market_classes()
+        namespace.lookup_or_new("/Equities/ABC", Market, spot=20.0).store()
+        mismatched = Params(CREATION_TOKEN, name="/Equities/ABC", ns=namespace)
+
+        with pytest.raises(TypeError, match="stored as Market"):
+            mismatched.reload()
 
 
 class TestEncoding:

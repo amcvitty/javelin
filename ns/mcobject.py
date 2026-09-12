@@ -43,7 +43,7 @@ class McObject:
     @classmethod
     def default_name(cls):
         """A unique name for an object nothing refers to by name."""
-        return f"/{cls.__name__}/{uuid.uuid4().hex}"
+        return f"/limbo/{cls.__name__}/{uuid.uuid4().hex}"
 
     def stored_values(self):
         """This object's stored cells, as {node name: value}.
@@ -56,6 +56,10 @@ class McObject:
     def store(self):
         """Persist this object, so a later lookup of its name finds it."""
         self.ns.store(self)
+
+    def reload(self):
+        """Reset this object's stored cells to what is currently in the store."""
+        return self.ns.reload(self)
 
     def __str__(self):
         return f"<{type(self).__name__}:{self.name}>"
