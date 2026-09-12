@@ -188,7 +188,17 @@ class CellBrowser(App):
         self._set_rows("#outputs", OUTPUT_COLUMNS, self._output_rows)
 
     def _set_rows(self, selector, columns, rows):
+        """Repopulate a table, keeping the cursor where the reader left it.
+
+        `clear` resets the cursor to the top row -- fine when the focus has
+        actually moved, but resolving or evaluating a row leaves the reader
+        looking at the same cell, and a row exploding into several (a map
+        edge, once resolved) should not scroll them back to row zero.
+        """
         table = self.query_one(selector, DataTable)
+        cursor_row = table.cursor_row
         table.clear()
         for row in rows:
             table.add_row(*(getattr(row, column) for column in columns))
+        if rows:
+            table.move_cursor(row=min(cursor_row, len(rows) - 1))

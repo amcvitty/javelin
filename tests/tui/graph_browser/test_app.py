@@ -188,6 +188,33 @@ class TestKeyBindingsReachNavigation:
         assert graph.cell(book.rate.key()).value.state is graph.ValueState.CLEAN
         assert app.nav.depth == 0
 
+    def test_evaluating_a_row_keeps_the_cursor_on_it(self):
+        """Repopulating the table must not scroll the reader back to row zero."""
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+        seen = {}
+
+        def check(app):
+            seen["cursor_row"] = app.query_one("#inputs", DataTable).cursor_row
+
+        press(CellBrowser(cell), ["e"], row=1, check=check)  # rate()
+
+        assert seen["cursor_row"] == 1
+
+    def test_resolving_a_map_edge_keeps_the_cursor_at_the_same_row_index(self):
+        """A row exploding into several after resolving is not a reason to
+        scroll the reader back to the top of the table."""
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+        seen = {}
+
+        def check(app):
+            seen["cursor_row"] = app.query_one("#inputs", DataTable).cursor_row
+
+        press(CellBrowser(cell), ["r"], row=4, check=check)  # the map edge
+
+        assert seen["cursor_row"] == 4
+
     def test_capital_e_evaluates_the_focused_cell(self):
         book, _ = make_book()
         cell = graph.cell(book.total.key(True))
