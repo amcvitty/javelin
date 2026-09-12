@@ -1,0 +1,113 @@
+# The pre-commit ritual from CLAUDE.md, run for us instead of by us.
+#
+# Three jobs: `checks` runs the four commands, `test` runs the suite with the
+# optional extras installed and reports coverage on the pull request, and
+# `no-extras` runs the same suite with nothing optional installed, which is what
+# holds the engine to its promise of zero runtime dependencies.
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A force-push replaces the commit; it should replace the run too.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Extras included: the type checkers need the terminal library present to
+      # resolve the browser package's imports.
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      # Every step below carries `if: always()`, so one run surfaces every
+      # problem rather than one problem per run. The job still fails if any of
+      # them did.
+      - name: ruff format
+        run: uv run ruff format --check
+
+      - name: ruff check
+        if: always()
+        run: uv run ruff check
+
+      - name: ty
+        if: always()
+        run: uv run ty check
+
+      # Pinned by the lockfile rather than floating to latest: editor parity
+      # with Pylance is the reason pyright is in the ritual at all.
+      - name: pyright
+        if: always()
+        run: uv run pyright
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    permissions:
+      # `contents: write` is for the orphan data branch the coverage action
+      # maintains; `pull-requests: write` is for the comment itself.
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      # The coverage floor lives in pyproject.toml, so this enforces locally
+      # what it enforces here.
+      - name: Run tests with coverage
+        run: uv run pytest --cov
+
+      # Unconditional: a tripped coverage floor should tell you which lines are
+      # uncovered, not just that it tripped. On a failing run the numbers come
+      # from a partial suite and will read low -- the job status is the verdict,
+      # not the comment.
+      - name: Coverage comment
+        if: always()
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  no-extras:
+    name: no-extras
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # No extras: the terminal library is absent, which is the point.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # No coverage here -- two jobs writing coverage data would compete over
+      # which one the comment action reads.
+      - name: Run tests
+        run: uv run pytest

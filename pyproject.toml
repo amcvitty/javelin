@@ -25,12 +25,19 @@ dev = [
 [tool.coverage.run]
 source = ["analytics", "graph", "ns", "tui"]
 branch = true
+# The coverage comment action reads the binary data file and needs paths that
+# are meaningful outside the runner that produced them.
+relative_files = true
 
 [tool.coverage.report]
 show_missing = true
+# Set below the current total so ordinary variation does not fail a PR that is
+# fine. CI enforces exactly this, because CI reads exactly this.
+fail_under = 90
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
     "@(typing\\.)?overload",
     "\\.\\.\\.$",
+    'if __name__ == "__main__":',
 ]
