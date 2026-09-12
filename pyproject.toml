@@ -5,19 +5,25 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+
+]
+
+[project.optional-dependencies]
+tui = [
+    "textual>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.1.0",
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "ruff>=0.16.6",
     "ty>=0.0.78",
 ]
 
-[dependency-groups]
-dev = [
-    "pytest-cov>=7.1.0",
-]
-
 [tool.coverage.run]
-source = ["analytics", "graph", "ns"]
+source = ["analytics", "graph", "ns", "tui"]
 branch = true
 
 [tool.coverage.report]

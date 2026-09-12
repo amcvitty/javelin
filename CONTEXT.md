@@ -140,8 +140,11 @@ for both.
 
 **`Slot`**:
 One `ivs` slot, described: its index, its kind, its source, its guard, its
-`reads`, whether it is statically resolvable, and the cells it resolves to.
-The read-only counterpart of `Input`, which is what the runtime runs.
+`reads`, the method an edge calls (`target`), whether it is statically
+resolvable, and the cells it resolves to. The read-only counterpart of
+`Input`, which is what the runtime runs. `target` is how an unresolved slot
+can be named at all: there is no cell to name it after yet, and a map edge's
+own source is a whole comprehension.
 
 **not yet resolved**:
 The third answer a slot can give about its cells, alongside some and none.
