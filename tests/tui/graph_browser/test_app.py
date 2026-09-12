@@ -16,6 +16,7 @@ import graph
 import ns
 from graph import node
 from ns import McObject
+from tests.helpers import make_book
 
 pytest.importorskip("textual", reason="the tui extra is not installed")
 
@@ -53,13 +54,34 @@ def book():
 
 def drive(app, check):
     """Run `check` against a mounted app, headless."""
+    press(app, [], check=check)
+
+
+def press(app, keys, *, row=None, table_id="#inputs", check=None):
+    """Run `app` headless, focus a table row, press some keys, and return `app`.
+
+    What each key means to `Navigation` is `test_navigation.py`'s business;
+    this only has to show that the binding reaches it. `check`, if given, runs
+    against the still-mounted app -- querying its widgets only works before
+    the app has torn down.
+    """
 
     async def main():
         async with app.run_test() as pilot:
             await pilot.pause()
-            check(app)
+            if row is not None:
+                table = pilot.app.query_one(table_id, DataTable)
+                table.focus()
+                table.move_cursor(row=row)
+                await pilot.pause()
+            for key in keys:
+                await pilot.press(key)
+            await pilot.pause()
+            if check is not None:
+                check(app)
 
     asyncio.run(main())
+    return app
 
 
 class TestTheApp:
@@ -121,3 +143,70 @@ class TestShowNode:
         drive(app, check)
 
         assert shown[0].graph is isolated
+
+
+class TestKeyBindingsReachNavigation:
+    """What each key does is `test_navigation.py`'s business -- only that the
+    binding reaches `Navigation`, and that the tables reflect it, is checked
+    here."""
+
+    def test_enter_drills_into_the_highlighted_input_row(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+
+        app = press(CellBrowser(cell), ["enter"], row=1)  # rate(): one cell
+
+        assert app.nav.depth == 1
+        assert app.nav.focus == book.rate.key()
+
+    def test_backspace_goes_back(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+
+        app = press(CellBrowser(cell), ["enter", "backspace"], row=1)
+
+        assert app.nav.depth == 0
+        assert app.nav.focus == cell
+
+    def test_r_resolves_a_row_without_moving_the_focus(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+        assert cell.slots[4].cells is graph.UNRESOLVED
+
+        app = press(CellBrowser(cell), ["r"], row=4)  # the map edge
+
+        assert app.nav.depth == 0
+        assert app.nav.focus == cell
+        assert cell.slots[4].cells is not graph.UNRESOLVED
+
+    def test_e_evaluates_the_highlighted_rows_cell(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+
+        app = press(CellBrowser(cell), ["e"], row=1)  # rate()
+
+        assert graph.cell(book.rate.key()).value.state is graph.ValueState.CLEAN
+        assert app.nav.depth == 0
+
+    def test_capital_e_evaluates_the_focused_cell(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+
+        app = press(CellBrowser(cell), ["E"])
+
+        assert app.nav.focus.value.state is graph.ValueState.CLEAN
+
+    def test_the_tables_repopulate_from_the_new_focus_after_drilling(self):
+        book, _ = make_book()
+        cell = graph.cell(book.total.key(True))
+        seen = {}
+
+        def check(app):
+            seen["row_count"] = app.query_one("#inputs", DataTable).row_count
+            seen["sub_title"] = app.sub_title
+
+        press(CellBrowser(cell), ["enter"], row=1, check=check)  # -> rate()
+
+        rate_cell = graph.cell(book.rate.key())
+        assert seen["row_count"] == len(rate_cell.slots)
+        assert seen["sub_title"] == str(rate_cell)
