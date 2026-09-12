@@ -72,7 +72,7 @@ def to_html(graph_data: GraphData) -> str:
 </style>
 </head>
 <body>
-<div id="viz-toolbar">{html.escape(root_label)}</div>
+<div id="viz-toolbar"><span id="viz-title">{html.escape(root_label)}</span></div>
 <svg id="viz-graph"></svg>
 <script id="graph-data" type="application/json">{payload}</script>
 <script>

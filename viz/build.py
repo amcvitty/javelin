@@ -49,6 +49,13 @@ class NodeEntry:
     `group` is the id of the `GroupEntry` this node is hidden inside, or
     `None` if it is visible as soon as the picture is shown -- reached from
     the root without crossing a collapsed `MapEdge`.
+
+    `object_id` is shared by every cell of the same object, so the renderer
+    can draw them inside one surrounding box labelled `object_label` --
+    `label` stays the full identity (object, method and arguments) for
+    anything that reads a `GraphData` directly, while `method_label` is what
+    goes on the box itself, since the surrounding box already says whose
+    method it is.
     """
 
     id: str
@@ -57,6 +64,9 @@ class NodeEntry:
     value: str
     annotations: tuple[str, ...]
     group: str | None
+    object_id: str
+    object_label: str
+    method_label: str
 
 
 @dataclass(frozen=True)
@@ -112,8 +122,17 @@ def _object_name(obj):
 
 def _label(cell):
     """A cell in this repo's own vocabulary: object, method and arguments."""
+    return f"{_object_name(cell.obj)}.{_method_label(cell)}"
+
+
+def _method_label(cell):
+    """A cell's identity within its object's box: method and arguments alone.
+
+    The object name is what the surrounding box is labelled with, so
+    repeating it on every cell inside would say the same thing twice.
+    """
     args = ", ".join(repr(arg) for arg in cell.args)
-    return f"{_object_name(cell.obj)}.{cell.method_name}({args})"
+    return f"{cell.method_name}({args})"
 
 
 def _value_text(cell_value):
@@ -157,12 +176,23 @@ def _annotations(cell):
 def build_graph(root: Cell) -> GraphData:
     """The transitive dependency graph rooted at `root`, as plain data."""
     ids: dict[tuple, str] = {}
+    object_ids: dict[int, str] = {}
     nodes: dict[str, NodeEntry] = {}
     groups: dict[str, GroupEntry] = {}
     edges: list[EdgeEntry] = []
     done: set[tuple] = set()
     path: set[tuple] = set()
     group_ids = (f"g{n}" for n in itertools.count())
+    obj_ids = (f"o{n}" for n in itertools.count())
+
+    def object_id_for(obj):
+        # Keyed by identity, not equality: two objects a namespace considers
+        # equal are still two boxes if they are not the same object -- the
+        # picture groups cells by which object they actually ran on.
+        key = id(obj)
+        if key not in object_ids:
+            object_ids[key] = next(obj_ids)
+        return object_ids[key]
 
     def node_id_for(cell, group):
         key = cell.key
@@ -177,6 +207,9 @@ def build_graph(root: Cell) -> GraphData:
             value=_value_text(cell.value),
             annotations=_annotations(cell),
             group=group,
+            object_id=object_id_for(cell.obj),
+            object_label=_object_name(cell.obj),
+            method_label=_method_label(cell),
         )
         return node_id
 

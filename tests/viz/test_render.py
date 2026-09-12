@@ -40,6 +40,9 @@ def _sample_graph_data():
                 value="5.0",
                 annotations=("hedged=True",),
                 group=None,
+                object_id="o0",
+                object_label="Book",
+                method_label="pv()",
             ),
             "n1": NodeEntry(
                 id="n1",
@@ -48,6 +51,9 @@ def _sample_graph_data():
                 value="",
                 annotations=(),
                 group="g0",
+                object_id="o1",
+                object_label="Position",
+                method_label="pv()",
             ),
         },
         groups={

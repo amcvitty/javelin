@@ -13,7 +13,7 @@ otherwise name are not really depended on any more.
 
 import graph
 from graph import ValueState, node
-from tests.helpers import make_book, make_pricer
+from tests.helpers import make_book, make_linked, make_pricer
 from viz.build import build_graph
 
 
@@ -316,3 +316,48 @@ class TestDiamonds:
         right = by_label(data, "Shared.right()")
         assert edges_from(data, left.id)[0].to_id == leaf_nodes[0].id
         assert edges_from(data, right.id)[0].to_id == leaf_nodes[0].id
+
+
+class TestObjectClustering:
+    """Cells share `object_id` exactly when they ran on the same object, so
+    the renderer can draw one surrounding box per object rather than
+    repeating the object's name on every cell inside it."""
+
+    def test_cells_of_the_same_object_share_one_object_id(self):
+        Pricer = make_pricer()
+        pricer = Pricer()
+
+        data = build_graph(graph.cell(pricer.pv.key()))
+
+        object_ids = {n.object_id for n in data.nodes.values()}
+        assert len(object_ids) == 1
+
+    def test_the_object_label_names_the_object(self):
+        Pricer = make_pricer()
+        pricer = Pricer()
+
+        data = build_graph(graph.cell(pricer.pv.key()))
+
+        assert by_label(data, "Pricer.pv()").object_label == "Pricer"
+
+    def test_method_label_excludes_the_object_name(self):
+        Pricer = make_pricer()
+        pricer = Pricer()
+
+        data = build_graph(graph.cell(pricer.pv.key()))
+
+        pv = by_label(data, "Pricer.pv()")
+        assert pv.method_label == "pv()"
+        assert "Pricer" not in pv.method_label
+
+    def test_cells_of_different_objects_get_different_object_ids(self):
+        _, _, _market, option = make_linked()
+
+        data = build_graph(graph.cell(option.strike.key()))
+
+        by_object_label: dict[str, set[str]] = {}
+        for n in data.nodes.values():
+            by_object_label.setdefault(n.object_label, set()).add(n.object_id)
+        assert len(by_object_label) >= 2  # at least Market and Option
+        for object_ids in by_object_label.values():
+            assert len(object_ids) == 1  # one object, one id -- never split
