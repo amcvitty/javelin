@@ -12,6 +12,9 @@ dependencies = [
 tui = [
     "textual[syntax]>=1.0",
 ]
+jupyter = [
+    "ipython>=8.0",
+]
 
 [dependency-groups]
 dev = [
@@ -23,7 +26,7 @@ dev = [
 ]
 
 [tool.coverage.run]
-source = ["analytics", "graph", "ns", "tui"]
+source = ["analytics", "graph", "ns", "tui", "viz"]
 branch = true
 # The coverage comment action reads the binary data file and needs paths that
 # are meaningful outside the runner that produced them.
