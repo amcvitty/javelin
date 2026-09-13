@@ -1,6 +1,6 @@
 # Repository Coverage
 
-
+[Full report](https://htmlpreview.github.io/?https://github.com/amcvitty/javelin/blob/python-coverage-comment-action-data/htmlcov/index.html)
 
 | Name                               |    Stmts |     Miss |   Branch |   BrPart |   Cover |   Missing |
 |----------------------------------- | -------: | -------: | -------: | -------: | ------: | --------: |
@@ -26,7 +26,12 @@
 | tui/graph\_browser/app.py          |      178 |       12 |       34 |        7 |     89% |128, 223-224, 227-\>exit, 233, 249-\>251, 252-259, 290, 296, 298 |
 | tui/graph\_browser/navigation.py   |       62 |        2 |       18 |        2 |     95% |  127, 132 |
 | tui/graph\_browser/render.py       |      101 |        1 |       28 |        1 |     98% |       171 |
-| **TOTAL**                          | **1568** |   **75** |  **366** |   **28** | **94%** |           |
+| viz/\_\_init\_\_.py                |        4 |        0 |        0 |        0 |    100% |           |
+| viz/\_\_main\_\_.py                |       13 |       13 |        2 |        0 |      0% |     14-29 |
+| viz/build.py                       |       96 |        0 |       26 |        1 |     99% | 169-\>166 |
+| viz/render.py                      |       22 |        0 |        6 |        0 |    100% |           |
+| viz/show.py                        |       40 |        1 |        2 |        0 |     98% |        45 |
+| **TOTAL**                          | **1743** |   **89** |  **402** |   **29** | **94%** |           |
 
 
 ## Setup coverage badge
@@ -35,11 +40,22 @@ Below are examples of the badges you can use in your main branch `README` file.
 
 ### Direct image
 
-[![Coverage badge](https://github.com/amcvitty/javelin/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/amcvitty/javelin/tree/python-coverage-comment-action-data)
+[![Coverage badge](https://raw.githubusercontent.com/amcvitty/javelin/python-coverage-comment-action-data/badge.svg)](https://htmlpreview.github.io/?https://github.com/amcvitty/javelin/blob/python-coverage-comment-action-data/htmlcov/index.html)
 
 This is the one to use if your repository is private or if you don't want to customize anything.
 
+### [Shields.io](https://shields.io) Json Endpoint
 
+[![Coverage badge](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/amcvitty/javelin/python-coverage-comment-action-data/endpoint.json)](https://htmlpreview.github.io/?https://github.com/amcvitty/javelin/blob/python-coverage-comment-action-data/htmlcov/index.html)
+
+Using this one will allow you to [customize](https://shields.io/endpoint) the look of your badge.
+It won't work with private repositories. It won't be refreshed more than once per five minutes.
+
+### [Shields.io](https://shields.io) Dynamic Badge
+
+[![Coverage badge](https://img.shields.io/badge/dynamic/json?color=brightgreen&label=coverage&query=%24.message&url=https%3A%2F%2Fraw.githubusercontent.com%2Famcvitty%2Fjavelin%2Fpython-coverage-comment-action-data%2Fendpoint.json)](https://htmlpreview.github.io/?https://github.com/amcvitty/javelin/blob/python-coverage-comment-action-data/htmlcov/index.html)
+
+This one will always be the same color. It won't work for private repos. I'm not even sure why we included it.
 
 ## What is that?
 
