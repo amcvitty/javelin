@@ -9,7 +9,7 @@
 | analytics/book.py                  |       22 |        3 |        0 |        0 |     86% |25, 34, 57 |
 | analytics/instrument.py            |       47 |        2 |        0 |        0 |     96% |    48, 58 |
 | analytics/market.py                |       22 |        1 |        0 |        0 |     95% |        44 |
-| graph/\_\_init\_\_.py              |       26 |        0 |        0 |        0 |    100% |           |
+| graph/\_\_init\_\_.py              |       34 |        0 |        2 |        0 |    100% |           |
 | graph/cell.py                      |       74 |        1 |       10 |        1 |     98% |       212 |
 | graph/compiler.py                  |       82 |        2 |       18 |        1 |     97% |58-\>57, 110-112 |
 | graph/ir.py                        |       67 |        0 |        8 |        0 |    100% |           |
@@ -23,10 +23,10 @@
 | tui/\_\_init\_\_.py                |        0 |        0 |        0 |        0 |    100% |           |
 | tui/graph\_browser/\_\_init\_\_.py |       11 |        4 |        2 |        1 |     62% |41-42, 47-49 |
 | tui/graph\_browser/\_\_main\_\_.py |        2 |        2 |        0 |        0 |      0% |      9-11 |
-| tui/graph\_browser/app.py          |      165 |       12 |       34 |        7 |     88% |120, 206-207, 210-\>exit, 216, 232-\>234, 235-242, 273, 279, 281 |
+| tui/graph\_browser/app.py          |      178 |       12 |       34 |        7 |     89% |128, 223-224, 227-\>exit, 233, 249-\>251, 252-259, 290, 296, 298 |
 | tui/graph\_browser/navigation.py   |       62 |        2 |       18 |        2 |     95% |  127, 132 |
-| tui/graph\_browser/render.py       |       88 |        0 |       26 |        0 |    100% |           |
-| **TOTAL**                          | **1534** |   **74** |  **362** |   **27** | **94%** |           |
+| tui/graph\_browser/render.py       |      101 |        1 |       28 |        1 |     98% |       171 |
+| **TOTAL**                          | **1568** |   **75** |  **366** |   **28** | **94%** |           |
 
 
 ## Setup coverage badge
@@ -35,7 +35,7 @@ Below are examples of the badges you can use in your main branch `README` file.
 
 ### Direct image
 
-[![Coverage badge](https://github.com/amcvitty/beacon-clone/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/amcvitty/beacon-clone/tree/python-coverage-comment-action-data)
+[![Coverage badge](https://github.com/amcvitty/javelin/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/amcvitty/javelin/tree/python-coverage-comment-action-data)
 
 This is the one to use if your repository is private or if you don't want to customize anything.
 
