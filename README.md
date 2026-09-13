@@ -1,4 +1,4 @@
-# beacon-clone
+# Javelin
 
 An Excel-style calculation engine in Python. A method decorated with `@node` is
 a cell in a spreadsheet: it has a value, and the engine knows what that value
