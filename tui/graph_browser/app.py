@@ -17,7 +17,7 @@ from typing import ClassVar
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Footer, Header, Static, TextArea
 
 from .navigation import Navigation
 from .render import (
@@ -26,13 +26,21 @@ from .render import (
     InputRow,
     OutputRow,
     cell_label,
+    compiled_source,
     header_card,
     input_rows,
+    original_source,
     output_rows,
 )
 
 #: What marks a row or the header card as the site of a caught exception.
 _ERROR_MARK = "⚠"
+
+#: A source pane's height in rows, clamped to the text it holds -- short
+#: enough that a tiny node doesn't waste space, capped so a huge one cannot
+#: push the tables off screen. Past the cap the pane scrolls internally.
+_MIN_PANE_HEIGHT = 4
+_MAX_PANE_HEIGHT = 10
 
 
 @dataclass(frozen=True)
@@ -141,6 +149,7 @@ class CellBrowser(App):
     #breadcrumb { padding: 0 2; color: $text-muted; }
     .heading { padding: 0 2; color: $accent; text-style: bold; }
     DataTable { height: auto; margin: 0 2 1 2; }
+    TextArea { margin: 0 2 1 2; }
     """
 
     BINDINGS: ClassVar = [
@@ -182,6 +191,14 @@ class CellBrowser(App):
             # partial list is the only one there could be.
             yield Static("outputs", classes="heading")
             yield DataTable(id="outputs", cursor_type="row")
+            yield Static("original", classes="heading")
+            yield TextArea(
+                id="original", language="python", read_only=True, compact=True
+            )
+            yield Static("compiled", classes="heading")
+            yield TextArea(
+                id="compiled", language="python", read_only=True, compact=True
+            )
         yield Footer()
 
     def on_mount(self):
@@ -342,6 +359,8 @@ class CellBrowser(App):
         self._output_rows = self._marked(output_rows(cell), self._output_marker)
         self._set_rows("#inputs", INPUT_COLUMNS, self._input_rows)
         self._set_rows("#outputs", OUTPUT_COLUMNS, self._output_rows)
+        self._set_source("#original", original_source(cell))
+        self._set_source("#compiled", compiled_source(cell))
 
     def _marked(self, rows, marker_of):
         """Flag whichever of `rows` last raised, input or output alike.
@@ -372,3 +391,14 @@ class CellBrowser(App):
             table.add_row(*(getattr(row, column) for column in columns))
         if rows:
             table.move_cursor(row=min(cursor_row, len(rows) - 1))
+
+    def _set_source(self, selector, text):
+        """Load a source pane and size it to the text, 4 to 10 rows tall.
+
+        `splitlines`, not `count("\\n") + 1` -- `inspect.getsource`'s trailing
+        newline would otherwise count as one line more than is ever shown.
+        """
+        pane = self.query_one(selector, TextArea)
+        pane.load_text(text)
+        rows = len(text.splitlines())
+        pane.styles.height = max(_MIN_PANE_HEIGHT, min(rows, _MAX_PANE_HEIGHT))

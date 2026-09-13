@@ -8,6 +8,9 @@ by cells another test left behind.
 import contextlib
 import dataclasses
 import datetime
+import linecache
+import textwrap
+from typing import Any
 
 import graph
 import ns
@@ -216,6 +219,36 @@ def make_chooser():
             return self.item(self.which())
 
     return Chooser
+
+
+def make_dynamic_node():
+    """A node compiled from source that is no longer resolvable afterwards.
+
+    Mirrors a function defined by exec(): inspect.getsource has only
+    linecache to fall back on for a filename with no file behind it, so
+    evicting the cache entry once the class has compiled leaves the node
+    unable to say what it looked like as written -- exactly the failure
+    graph.source() has to turn into None rather than an exception.
+    """
+    filename = "<dynamic>"
+    source = textwrap.dedent(
+        """\
+        class Dynamic:
+            @node
+            def value(self):
+                return 1
+        """
+    )
+    linecache.cache[filename] = (
+        len(source),
+        None,
+        source.splitlines(keepends=True),
+        filename,
+    )
+    namespace: dict[str, Any] = {"node": node}
+    exec(compile(source, filename, "exec"), namespace)  # noqa: S102
+    linecache.cache.pop(filename, None)
+    return namespace["Dynamic"]
 
 
 def make_raising():

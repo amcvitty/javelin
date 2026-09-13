@@ -15,6 +15,7 @@ import graph
 import ns
 from graph import node
 from ns import McObject
+from tests.helpers import make_dynamic_node, make_fib
 from tui.graph_browser import render
 
 
@@ -427,6 +428,64 @@ class TestOutputTable:
         assert render.output_rows(graph.cell(book.pv.key(True))) == ()
 
 
+class TestSourcePanes:
+    """The original and compiled source, or a placeholder when neither reads."""
+
+    def test_original_source_is_written_as_the_author_wrote_it(self):
+        Fib = make_fib()
+
+        cell = graph.cell(Fib().fib.key(5))
+
+        assert "self.fib(n - 1)" in render.original_source(cell)
+
+    def test_compiled_source_is_the_rewritten_ivs_body(self):
+        Fib = make_fib()
+
+        cell = graph.cell(Fib().fib.key(5))
+
+        text = render.compiled_source(cell)
+
+        assert text.startswith(graph.code(Fib.fib))
+        assert "ivs[0] if ivs[0] < 2 else ivs[1] + ivs[2]" in text
+
+    def test_compiled_source_lists_what_fills_each_ivs_slot(self):
+        Fib = make_fib()
+
+        cell = graph.cell(Fib().fib.key(5))
+
+        assert render.compiled_source(cell).endswith(
+            "\n\n"
+            "ivs[0] = n\n"
+            "ivs[1] = self.fib(n - 1) if not n < 2\n"
+            "ivs[2] = self.fib(n - 2) if not n < 2"
+        )
+
+    def test_the_legend_is_skipped_for_a_node_with_no_slots(self):
+        class Sheet:
+            @node
+            def a(self):
+                return 1
+
+        cell = graph.cell(Sheet().a.key())
+
+        assert render.compiled_source(cell) == graph.code(Sheet.a)
+        assert "ivs[" not in render.compiled_source(cell)
+
+    def test_original_source_shows_the_placeholder_when_unavailable(self):
+        Dynamic = make_dynamic_node()
+        cell = graph.cell(Dynamic().value.key())
+
+        assert render.original_source(cell) == render.SOURCE_UNAVAILABLE
+
+    def test_compiled_source_is_unaffected_by_the_same_failure(self):
+        """A node whose original source is gone still compiled fine, so
+        code() has nothing to fall back on -- both panes fail independently."""
+        Dynamic = make_dynamic_node()
+        cell = graph.cell(Dynamic().value.key())
+
+        assert render.compiled_source(cell) != render.SOURCE_UNAVAILABLE
+
+
 class TestLookingCostsNothing:
     """Opening the browser runs no body."""
 
@@ -436,6 +495,8 @@ class TestLookingCostsNothing:
         render.header_card(cell)
         render.input_rows(cell)
         render.output_rows(cell)
+        render.original_source(cell)
+        render.compiled_source(cell)
 
         assert graph.cell(book.pv.key(True)).value.state.value == "uncomputed"
         assert graph.dirty() == ()

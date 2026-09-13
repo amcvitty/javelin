@@ -10,7 +10,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tui = [
-    "textual>=1.0",
+    "textual[syntax]>=1.0",
 ]
 jupyter = [
     "ipython>=8.0",

@@ -12,7 +12,7 @@ import pytest
 
 import graph
 from graph import node
-from tests.helpers import make_calc
+from tests.helpers import make_calc, make_dynamic_node
 
 
 def helper():
@@ -717,3 +717,32 @@ class TestUnsupported:
                 @node
                 def a():
                     return 1
+
+
+class TestSource:
+    def test_source_is_the_node_as_written_not_the_rewritten_body(self):
+        Calc = make_calc()
+
+        assert graph.source(Calc.sum) == (
+            "        @node\n"
+            "        def sum(self):\n"
+            "            return self.a() + self.b() + self.c() + 1\n"
+        )
+
+    def test_source_is_none_when_inspect_cannot_resolve_it(self):
+        Dynamic = make_dynamic_node()
+
+        assert graph.source(Dynamic.value) is None
+
+    def test_code_is_still_available_for_the_same_dynamic_node(self):
+        """source() failing must not stop code() from working -- they read
+        different things off the same Node."""
+        Dynamic = make_dynamic_node()
+
+        assert graph.code(Dynamic.value) == "def value(self, node, ivs):\n    return 1"
+
+    def test_source_of_a_non_node_is_an_error(self):
+        calc = make_calc()()
+
+        with pytest.raises(KeyError):
+            graph.source(calc.c)
